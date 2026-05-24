@@ -1,13 +1,13 @@
-"""Module entry point: ``python -m clipforge``."""
+"""Module entry point: ``python -m clipforge`` (with optional subcommand)."""
 
 from __future__ import annotations
 
-from clipforge.app import run
+from clipforge.cli import main
 
 
-def main() -> int:
-    return run()
+def main_entry() -> int:
+    return main()
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main_entry())

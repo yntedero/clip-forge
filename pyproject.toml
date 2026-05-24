@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
-clipforge = "clipforge.__main__:main"
+clipforge = "clipforge.cli:main"
 
 [build-system]
 requires = ["hatchling"]
