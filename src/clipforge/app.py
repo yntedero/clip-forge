@@ -464,12 +464,16 @@ class MainWindow(QMainWindow):
         # Status bar
         sb = QStatusBar(self)
         self.setStatusBar(sb)
-        self._lang_en_btn = self._make_lang_button("en", "EN")
-        self._lang_en_btn.clicked.connect(lambda: i18n_manager().set_locale("en"))
-        sb.addWidget(self._lang_en_btn)
-        self._lang_uk_btn = self._make_lang_button("uk", "UK")
-        self._lang_uk_btn.clicked.connect(lambda: i18n_manager().set_locale("uk"))
-        sb.addWidget(self._lang_uk_btn)
+        # Single flag-only toggle button: shows the CURRENT locale's flag;
+        # clicking switches to the other locale.
+        self._lang_btn = QPushButton(self)
+        self._lang_btn.setProperty("role", "ghost")
+        self._lang_btn.setFlat(True)
+        self._lang_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._lang_btn.setIconSize(QSize(24, 18))
+        self._lang_btn.setFixedSize(QSize(44, 28))
+        self._lang_btn.clicked.connect(self._toggle_locale)
+        sb.addWidget(self._lang_btn)
 
         self._status_msg = QLabel("", self)
         sb.addPermanentWidget(self._status_msg)
@@ -487,7 +491,7 @@ class MainWindow(QMainWindow):
         sb.addPermanentWidget(self._start_btn)
 
         self._refresh_status_bar()
-        self._refresh_lang_buttons()
+        self._refresh_lang_button()
 
         # Initial tab — pick first built-in if any.
         if self._builtins:
@@ -932,24 +936,27 @@ class MainWindow(QMainWindow):
 
     # ----- footer / status -----
 
-    def _make_lang_button(self, code: str, label: str) -> QPushButton:
-        btn = QPushButton(label, self)
-        btn.setProperty("role", "ghost")
-        btn.setProperty("lang", code)
-        btn.setFlat(True)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        icon = _flag_icon(code)
-        if icon is not None:
-            btn.setIcon(icon)
-            btn.setIconSize(QSize(20, 14))
-        return btn
+    def _toggle_locale(self) -> None:
+        if i18n_manager().locale == "en":
+            i18n_manager().set_locale("uk")
+        else:
+            i18n_manager().set_locale("en")
 
-    def _refresh_lang_buttons(self) -> None:
+    def _refresh_lang_button(self) -> None:
         active = i18n_manager().locale
-        for code, btn in (("en", self._lang_en_btn), ("uk", self._lang_uk_btn)):
-            btn.setProperty("selected", code == active)
-            btn.style().unpolish(btn)
-            btn.style().polish(btn)
+        icon = _flag_icon(active)
+        if icon is not None:
+            self._lang_btn.setIcon(icon)
+            self._lang_btn.setText("")
+        else:
+            # Fallback when flag PNGs are missing — show short code.
+            self._lang_btn.setText(active.upper())
+        # Tooltip indicates what clicking will do next.
+        other = "uk" if active == "en" else "en"
+        other_name = {"en": "English", "uk": "Українська"}[other]
+        self._lang_btn.setToolTip(other_name)
+        self._lang_btn.style().unpolish(self._lang_btn)
+        self._lang_btn.style().polish(self._lang_btn)
 
     def _refresh_status_bar(self) -> None:
         ready = ffmpeg_path().is_file()
@@ -1006,7 +1013,7 @@ class MainWindow(QMainWindow):
         for field, label_src in EFFECT_ORDER:
             self._effect_rows[field].retranslate(tr(label_src))
         self._refresh_status_bar()
-        self._refresh_lang_buttons()
+        self._refresh_lang_button()
 
 
 def build_main_window() -> QMainWindow:
