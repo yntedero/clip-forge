@@ -39,14 +39,25 @@ def test_app_window_opens(qtbot) -> None:  # type: ignore[no-untyped-def]
 
 
 @pytest.mark.qt
-def test_app_loads_stylesheet(qtbot) -> None:  # type: ignore[no-untyped-def]
+def test_app_loads_stylesheet(qapp) -> None:  # type: ignore[no-untyped-def]
     """ClipForgeApp loads the M0 stylesheet on construction."""
-    from PySide6.QtWidgets import QApplication
-
     from clipforge.app import ClipForgeApp
 
-    existing = QApplication.instance()
-    app = existing if isinstance(existing, ClipForgeApp) else ClipForgeApp([])
-    stylesheet = app.styleSheet()
+    assert isinstance(qapp, ClipForgeApp), (
+        f"Expected ClipForgeApp from the conftest qapp fixture, got {type(qapp).__name__}"
+    )
+    stylesheet = qapp.styleSheet()
     assert "QMainWindow" in stylesheet
     assert "#0A0612" in stylesheet
+
+
+def test_load_m0_stylesheet_raises_when_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If neither candidate path resolves, _load_m0_stylesheet raises FileNotFoundError."""
+    from clipforge import app
+
+    monkeypatch.setattr("clipforge.app.Path.is_file", lambda self: False)
+
+    with pytest.raises(FileNotFoundError, match="M0 stylesheet not found"):
+        app._load_m0_stylesheet()

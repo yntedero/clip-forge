@@ -66,7 +66,7 @@ def build_main_window() -> QMainWindow:
     return window
 
 
-def run() -> int:
+def run() -> int:  # pragma: no cover
     """Run the application: build the app, show the window, enter the loop."""
     app = ClipForgeApp(sys.argv)
     window = build_main_window()
