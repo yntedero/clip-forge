@@ -249,3 +249,30 @@ def test_pixel_shift_int_range() -> None:
         seen_x.add(re.pixel_shift_x)
         seen_y.add(re.pixel_shift_y)
     assert len(seen_x) > 1  # actually varying
+
+
+class _ZeroRng(random.Random):
+    """RNG whose random() always returns 0.0 and randint() always returns 0.
+
+    Used to force pixel_shift into the (0,0) safety-guard branch.
+    """
+
+    def random(self) -> float:  # type: ignore[override]
+        return 0.0
+
+    def randint(self, a: int, b: int) -> int:  # type: ignore[override]
+        return 0
+
+    def uniform(self, a: float, b: float) -> float:  # type: ignore[override]
+        return a  # lower bound — keeps other effects deterministic
+
+
+def test_pixel_shift_zero_zero_safety_branch() -> None:
+    """When both raw shifts round to 0, x is forced to 1 to keep the effect visible."""
+    from clipforge.core.effects import resolve_effects
+
+    cfg = _with("pixel_shift", intensity=1.0, probability=1.0)
+    rng = _ZeroRng()
+    re = resolve_effects(cfg, clip_index=0, rng=rng)
+    assert re.pixel_shift_x == 1
+    assert re.pixel_shift_y == 0
