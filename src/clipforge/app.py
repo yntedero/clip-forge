@@ -22,7 +22,7 @@ import unicodedata
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtCore import QSize, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent, QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -39,6 +40,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QStatusBar,
     QVBoxLayout,
@@ -140,6 +142,21 @@ def _app_icon() -> QIcon:
     if p is None:
         return QIcon()
     return QIcon(str(p))
+
+
+def _flag_icon(code: str) -> QIcon | None:
+    """Real flag PNG icon (CC0 from flagcdn.com), bundled in resources/icons/flags/."""
+    name = {"en": "gb.png", "uk": "ua.png"}.get(code)
+    if name is None:
+        return None
+    candidates = [
+        resources_dir() / "icons" / "flags" / name,
+        Path(__file__).resolve().parents[2] / "resources" / "icons" / "flags" / name,
+    ]
+    for c in candidates:
+        if c.is_file():
+            return QIcon(str(c))
+    return None
 
 
 def _user_presets_dir() -> Path:
@@ -366,7 +383,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(constants.WINDOW_TITLE)
         self.setMinimumSize(constants.WINDOW_MIN_WIDTH, constants.WINDOW_MIN_HEIGHT)
-        self.resize(constants.WINDOW_DEFAULT_WIDTH, constants.WINDOW_DEFAULT_HEIGHT)
+        # Default a touch taller so the whole effects list fits without scroll
+        # on a typical 1080p display.
+        self.resize(constants.WINDOW_DEFAULT_WIDTH, max(900, constants.WINDOW_DEFAULT_HEIGHT))
         icon = _app_icon()
         if not icon.isNull():
             self.setWindowIcon(icon)
@@ -424,9 +443,15 @@ class MainWindow(QMainWindow):
         splitter.setChildrenCollapsible(False)
         outer.addWidget(splitter, 1)
 
-        # Left: config card
+        # Left: config card wrapped in a vertical scroll area so the long
+        # effects list never gets clipped on smaller windows.
         self._config_card = self._build_config_card()
-        splitter.addWidget(self._config_card)
+        config_scroll = QScrollArea()
+        config_scroll.setWidgetResizable(True)
+        config_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        config_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        config_scroll.setWidget(self._config_card)
+        splitter.addWidget(config_scroll)
 
         # Right: output card
         self._output_card = self._build_output_card()
@@ -439,16 +464,10 @@ class MainWindow(QMainWindow):
         # Status bar
         sb = QStatusBar(self)
         self.setStatusBar(sb)
-        self._lang_en_btn = QPushButton(self._flag_for("en") + "  EN", self)
-        self._lang_en_btn.setProperty("role", "ghost")
-        self._lang_en_btn.setFlat(True)
-        self._lang_en_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._lang_en_btn = self._make_lang_button("en", "EN")
         self._lang_en_btn.clicked.connect(lambda: i18n_manager().set_locale("en"))
         sb.addWidget(self._lang_en_btn)
-        self._lang_uk_btn = QPushButton(self._flag_for("uk") + "  UK", self)
-        self._lang_uk_btn.setProperty("role", "ghost")
-        self._lang_uk_btn.setFlat(True)
-        self._lang_uk_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._lang_uk_btn = self._make_lang_button("uk", "UK")
         self._lang_uk_btn.clicked.connect(lambda: i18n_manager().set_locale("uk"))
         sb.addWidget(self._lang_uk_btn)
 
@@ -540,9 +559,10 @@ class MainWindow(QMainWindow):
         gi_row.addWidget(self._gi_slider, 1)
         v.addLayout(gi_row)
 
-        # Output configuration row (two columns of combos)
-        out_grid = QHBoxLayout()
-        out_grid.setSpacing(12)
+        # Output configuration: 2x2 grid so each combo has room for its text.
+        out_grid = QGridLayout()
+        out_grid.setHorizontalSpacing(14)
+        out_grid.setVerticalSpacing(8)
 
         def col(label_src: str, combo: QComboBox, label_attr: str) -> QWidget:
             wrap = QWidget(card)
@@ -552,7 +572,8 @@ class MainWindow(QMainWindow):
             lbl = QLabel(tr(label_src), wrap)
             lbl.setProperty("role", "caption")
             wl.addWidget(lbl)
-            combo.setMinimumWidth(140)
+            combo.setMinimumWidth(180)
+            combo.setMinimumHeight(28)
             wl.addWidget(combo)
             setattr(self, label_attr, lbl)
             return wrap
@@ -567,7 +588,7 @@ class MainWindow(QMainWindow):
         ):
             self._aspect.addItem(tr(label) if label == "Original" else label, value)
         self._aspect.currentIndexChanged.connect(self._on_value_changed)
-        out_grid.addWidget(col("Aspect ratio", self._aspect, "_aspect_label"))
+        out_grid.addWidget(col("Aspect ratio", self._aspect, "_aspect_label"), 0, 0)
 
         self._codec = QComboBox(card)
         for value, label in (
@@ -579,7 +600,7 @@ class MainWindow(QMainWindow):
         ):
             self._codec.addItem(label, value)
         self._codec.currentIndexChanged.connect(self._on_value_changed)
-        out_grid.addWidget(col("Codec", self._codec, "_codec_label"))
+        out_grid.addWidget(col("Codec", self._codec, "_codec_label"), 0, 1)
 
         self._quality = QComboBox(card)
         for value, label in (
@@ -589,7 +610,7 @@ class MainWindow(QMainWindow):
         ):
             self._quality.addItem(tr(label), value)
         self._quality.currentIndexChanged.connect(self._on_value_changed)
-        out_grid.addWidget(col("Quality", self._quality, "_quality_label"))
+        out_grid.addWidget(col("Quality", self._quality, "_quality_label"), 1, 0)
 
         self._audio = QComboBox(card)
         for value, label in (
@@ -599,7 +620,9 @@ class MainWindow(QMainWindow):
         ):
             self._audio.addItem(tr(label), value)
         self._audio.currentIndexChanged.connect(self._on_value_changed)
-        out_grid.addWidget(col("Audio", self._audio, "_audio_label"))
+        out_grid.addWidget(col("Audio", self._audio, "_audio_label"), 1, 1)
+        out_grid.setColumnStretch(0, 1)
+        out_grid.setColumnStretch(1, 1)
         v.addLayout(out_grid)
 
         # Pitch preservation
@@ -909,12 +932,17 @@ class MainWindow(QMainWindow):
 
     # ----- footer / status -----
 
-    def _flag_for(self, code: str) -> str:
-        if code == "en":
-            return "\U0001f1ec\U0001f1e7"  # GB
-        if code == "uk":
-            return "\U0001f1fa\U0001f1e6"  # UA
-        return ""
+    def _make_lang_button(self, code: str, label: str) -> QPushButton:
+        btn = QPushButton(label, self)
+        btn.setProperty("role", "ghost")
+        btn.setProperty("lang", code)
+        btn.setFlat(True)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        icon = _flag_icon(code)
+        if icon is not None:
+            btn.setIcon(icon)
+            btn.setIconSize(QSize(20, 14))
+        return btn
 
     def _refresh_lang_buttons(self) -> None:
         active = i18n_manager().locale
