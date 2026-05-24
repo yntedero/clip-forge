@@ -79,6 +79,11 @@ exclude = ["build/", "dist/", "resources/"]
 module = ["PySide6.*", "qtawesome.*"]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = ["clipforge.app"]
+# PySide6 ships no stubs; suppress errors that arise from untyped Qt bases.
+disable_error_code = ["misc", "no-any-return"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers --cov=src/clipforge --cov-report=term-missing --cov-branch"
