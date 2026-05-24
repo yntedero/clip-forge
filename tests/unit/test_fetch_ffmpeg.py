@@ -133,3 +133,86 @@ def test_verify_sha256_match_passes(fetch_mod: ModuleType, tmp_path: Path) -> No
     file.write_bytes(b"hello")
     expected = hashlib.sha256(b"hello").hexdigest()
     fetch_mod.verify_sha256(file, expected=expected)
+
+
+def test_constants_includes_all_platforms(fetch_mod: ModuleType) -> None:
+    for platform in ("windows", "linux", "macos"):
+        assert platform in fetch_mod.SOURCES, f"missing platform: {platform}"
+        entry = fetch_mod.SOURCES[platform]
+        for key in (
+            "url",
+            "sha256",
+            "archive_type",
+            "ffmpeg_member_suffix",
+            "ffprobe_member_suffix",
+            "out_ffmpeg",
+            "out_ffprobe",
+        ):
+            assert key in entry, f"{platform} missing key: {key}"
+
+
+def test_detect_platform_windows(fetch_mod: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(fetch_mod.sys, "platform", "win32")
+    assert fetch_mod.detect_platform() == "windows"
+
+
+def test_detect_platform_macos(fetch_mod: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(fetch_mod.sys, "platform", "darwin")
+    assert fetch_mod.detect_platform() == "macos"
+
+
+def test_detect_platform_linux(fetch_mod: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(fetch_mod.sys, "platform", "linux")
+    assert fetch_mod.detect_platform() == "linux"
+
+
+def test_detect_platform_unknown_raises(
+    fetch_mod: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(fetch_mod.sys, "platform", "haiku")
+    with pytest.raises(fetch_mod.FetchError, match="unsupported platform"):
+        fetch_mod.detect_platform()
+
+
+def test_verify_sha256_placeholder_raises(fetch_mod: ModuleType, tmp_path: Path) -> None:
+    file = tmp_path / "blob.bin"
+    file.write_bytes(b"x")
+    with pytest.raises(fetch_mod.FetchError, match="placeholder is still"):
+        fetch_mod.verify_sha256(file, expected="REPLACE_WITH_ACTUAL_SHA256")
+
+
+def test_extract_tar_picks_ffmpeg_and_ffprobe(fetch_mod: ModuleType, tmp_path: Path) -> None:
+    import io
+    import tarfile
+
+    archive = tmp_path / "ffmpeg.tar.xz"
+    with tarfile.open(archive, "w:xz") as tf:
+        for name, data in (
+            ("ffmpeg-7.1.1/ffmpeg", b"FFMPEG_BINARY"),
+            ("ffmpeg-7.1.1/ffprobe", b"FFPROBE_BINARY"),
+        ):
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+
+    out_dir = tmp_path / "ffmpeg_out"
+    fetch_mod.extract_archive(archive, out_dir, platform="linux")
+
+    assert (out_dir / "ffmpeg").read_bytes() == b"FFMPEG_BINARY"
+    assert (out_dir / "ffprobe").read_bytes() == b"FFPROBE_BINARY"
+
+
+def test_extract_zip_corrupt_raises(fetch_mod: ModuleType, tmp_path: Path) -> None:
+    archive = tmp_path / "corrupt.zip"
+    archive.write_bytes(b"this is not a zip file")
+    out_dir = tmp_path / "out"
+    with pytest.raises(fetch_mod.FetchError, match="corrupt zip"):
+        fetch_mod.extract_archive(archive, out_dir, platform="windows")
+
+
+def test_main_detect_platform_failure_returns_2(
+    fetch_mod: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(fetch_mod.sys, "platform", "haiku")
+    exit_code = fetch_mod.main(["--out-dir", str(tmp_path / "out")])
+    assert exit_code == 2

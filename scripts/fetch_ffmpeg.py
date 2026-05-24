@@ -46,6 +46,10 @@ SOURCES: Final[dict[str, dict[str, str]]] = {
         "out_ffmpeg": "ffmpeg",
         "out_ffprobe": "ffprobe",
     },
+    # TODO: macOS support is structurally incomplete. evermeet.cx serves
+    # ffmpeg and ffprobe as SEPARATE zip downloads; the single-URL schema
+    # below cannot express this. Before enabling macOS in CI, extend the
+    # source schema to support a separate `ffprobe_url` (or equivalent).
     "macos": {
         "url": "https://evermeet.cx/ffmpeg/getrelease/zip",
         "sha256": "REPLACE_WITH_ACTUAL_SHA256",
@@ -83,13 +87,12 @@ def sha256_of_file(path: Path) -> str:
 
 
 def verify_sha256(path: Path, expected: str) -> None:
+    actual = sha256_of_file(path)
     if expected == "REPLACE_WITH_ACTUAL_SHA256":
-        actual = sha256_of_file(path)
         raise FetchError(
             "SHA-256 placeholder is still in SOURCES. Re-run after updating "
             f"the entry with: {actual}"
         )
-    actual = sha256_of_file(path)
     if actual.lower() != expected.lower():
         raise FetchError(f"SHA-256 mismatch for {path.name}: expected {expected}, got {actual}")
 
@@ -105,24 +108,30 @@ def download(url: str, dest: Path) -> None:
 def _extract_member(archive: Path, suffix: str, out_path: Path, archive_type: str) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if archive_type == "zip":
-        with zipfile.ZipFile(archive) as zf:
-            for member in zf.namelist():
-                if member.endswith(suffix):
-                    with zf.open(member) as src, out_path.open("wb") as dst:
-                        shutil.copyfileobj(src, dst)
-                    return
+        try:
+            with zipfile.ZipFile(archive) as zf:
+                for member in zf.namelist():
+                    if member.endswith(suffix):
+                        with zf.open(member) as src, out_path.open("wb") as dst:
+                            shutil.copyfileobj(src, dst)
+                        return
+        except zipfile.BadZipFile as exc:
+            raise FetchError(f"corrupt zip archive {archive}: {exc}") from exc
         raise FetchError(f"member ending in {suffix!r} not found in {archive}")
     if archive_type == "tar":
-        with tarfile.open(archive) as tf:
-            for member in tf.getmembers():
-                if member.name.endswith(suffix):
-                    extracted = tf.extractfile(member)
-                    if extracted is None:
-                        raise FetchError(f"could not read {member.name} from {archive}")
-                    with out_path.open("wb") as dst:
-                        shutil.copyfileobj(extracted, dst)
-                    out_path.chmod(0o755)
-                    return
+        try:
+            with tarfile.open(archive) as tf:
+                for member in tf.getmembers():
+                    if member.name.endswith(suffix):
+                        extracted = tf.extractfile(member)
+                        if extracted is None:
+                            raise FetchError(f"could not read {member.name} from {archive}")
+                        with out_path.open("wb") as dst:
+                            shutil.copyfileobj(extracted, dst)
+                        out_path.chmod(0o755)
+                        return
+        except tarfile.TarError as exc:
+            raise FetchError(f"corrupt tar archive {archive}: {exc}") from exc
         raise FetchError(f"member ending in {suffix!r} not found in {archive}")
     raise FetchError(f"unknown archive_type: {archive_type!r}")
 
@@ -183,19 +192,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    platform = detect_platform() if args.platform == "auto" else args.platform
-    out_dir: Path = args.out_dir
+    try:
+        platform = detect_platform() if args.platform == "auto" else args.platform
+        out_dir: Path = args.out_dir
 
-    if not args.force and already_present(out_dir, platform):
+        if not args.force and already_present(out_dir, platform):
+            print(
+                f"ffmpeg + ffprobe already present in {out_dir}; "
+                "skipping (use --force to redownload).",
+                file=sys.stderr,
+            )
+            return 0
+
+        source = SOURCES[platform]
         print(
-            f"ffmpeg + ffprobe already present in {out_dir}; skipping (use --force to redownload).",
+            f"Downloading FFmpeg {FFMPEG_VERSION} for {platform}...",
             file=sys.stderr,
         )
-        return 0
-
-    source = SOURCES[platform]
-    print(f"Downloading FFmpeg {FFMPEG_VERSION} for {platform}...", file=sys.stderr)
-    try:
         with tempfile.TemporaryDirectory() as tmp:
             archive = Path(tmp) / "ffmpeg-archive"
             download(source["url"], archive)
