@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "name": "TikTok Hard Uniq",
+  "description": "Aggressive uniqualization for high-volume duplicate posting.",
+  "builtin": true,
+  "mode": "clips",
+  "slicing": {
+    "strategy": "sequential",
+    "min_length_sec": 4.0,
+    "max_length_sec": 7.0,
+    "skip_start_sec": 0.0,
+    "skip_end_sec": 0.0,
+    "random_sample_count": null
+  },
+  "effects": {
+    "global_intensity": 1.2,
+    "mirror": { "enabled": true, "intensity": 1.0, "probability": 0.5 },
+    "zoom": { "enabled": true, "intensity": 0.9, "probability": 1.0 },
+    "speed": { "enabled": true, "intensity": 0.8, "probability": 1.0 },
+    "color": { "enabled": true, "intensity": 0.8, "probability": 1.0 },
+    "rotation": { "enabled": true, "intensity": 0.5, "probability": 1.0 },
+    "edge_crop": { "enabled": true, "intensity": 0.8, "probability": 1.0 },
+    "noise": { "enabled": true, "intensity": 0.3, "probability": 1.0 },
+    "vignette": { "enabled": true, "intensity": 0.4, "probability": 1.0 },
+    "pixel_shift": { "enabled": true, "intensity": 1.0, "probability": 1.0 },
+    "film_grain": { "enabled": true, "intensity": 0.3, "probability": 1.0 },
+    "pitch_preservation": false
+  },
+  "output": {
+    "aspect": "9:16",
+    "codec": "libx264",
+    "quality": "balanced",
+    "audio_mode": "keep",
+    "audio_overlay_path": null,
+    "audio_overlay_volume": 0.6,
+    "source_audio_volume": 1.0,
+    "target_fps": 30,
+    "shuffle_assembled": false,
+    "transition": "none"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "name": "YouTube Shorts",
+  "description": "Balanced settings for YouTube Shorts.",
+  "builtin": true,
+  "mode": "clips",
+  "slicing": {
+    "strategy": "sequential",
+    "min_length_sec": 5.0,
+    "max_length_sec": 10.0,
+    "skip_start_sec": 0.0,
+    "skip_end_sec": 0.0,
+    "random_sample_count": null
+  },
+  "effects": {
+    "global_intensity": 0.7,
+    "mirror": { "enabled": true, "intensity": 1.0, "probability": 0.4 },
+    "zoom": { "enabled": true, "intensity": 0.5, "probability": 1.0 },
+    "speed": { "enabled": true, "intensity": 0.3, "probability": 0.7 },
+    "color": { "enabled": true, "intensity": 0.4, "probability": 1.0 },
+    "rotation": { "enabled": false, "intensity": 0.0, "probability": 0.0 },
+    "edge_crop": { "enabled": false, "intensity": 0.0, "probability": 0.0 },
+    "noise": { "enabled": false, "intensity": 0.0, "probability": 0.0 },
+    "vignette": { "enabled": false, "intensity": 0.0, "probability": 0.0 },
+    "pixel_shift": { "enabled": true, "intensity": 0.5, "probability": 1.0 },
+    "film_grain": { "enabled": false, "intensity": 0.0, "probability": 0.0 },
+    "pitch_preservation": false
+  },
+  "output": {
+    "aspect": "9:16",
+    "codec": "libx264",
+    "quality": "balanced",
+    "audio_mode": "keep",
+    "audio_overlay_path": null,
+    "audio_overlay_volume": 0.6,
+    "source_audio_volume": 1.0,
+    "target_fps": 30,
+    "shuffle_assembled": false,
+    "transition": "none"
+  }
+}

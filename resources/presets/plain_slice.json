@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "name": "Plain Slice",
+  "description": "Cuts the video into clips with no effects applied.",
+  "builtin": true,
+  "mode": "clips",
+  "slicing": {
+    "strategy": "sequential",
+    "min_length_sec": 5.0,
+    "max_length_sec": 10.0,
+    "skip_start_sec": 0.0,
+    "skip_end_sec": 0.0,
+    "random_sample_count": null
+  },
+  "effects": {
+    "global_intensity": 0.0,
+    "mirror": { "enabled": false, "intensity": 0.0, "probability": 0.0 },
+    "zoom": { "enabled": false, "intensity": 0.0, "probability": 0.0 },
+    "speed": { "enabled": false, "intensity": 0.0, "probability": 0.0 },
+    "color": { "enabled": false, "intensity": 0.0, "probability": 0.0 },
+    "rotation": { "enabled": false, "intensity": 0.0, "probability": 0.0 },
+    "edge_crop": { "enabled": false, "intensity": 0.0, "probability": 0.0 },
+    "noise": { "enabled": false, "intensity": 0.0, "probability": 0.0 },
+    "vignette": { "enabled": false, "intensity": 0.0, "probability": 0.0 },
+    "pixel_shift": { "enabled": false, "intensity": 0.0, "probability": 0.0 },
+    "film_grain": { "enabled": false, "intensity": 0.0, "probability": 0.0 },
+    "pitch_preservation": false
+  },
+  "output": {
+    "aspect": "original",
+    "codec": "libx264",
+    "quality": "balanced",
+    "audio_mode": "keep",
+    "audio_overlay_path": null,
+    "audio_overlay_volume": 0.6,
+    "source_audio_volume": 1.0,
+    "target_fps": 30,
+    "shuffle_assembled": false,
+    "transition": "none"
+  }
+}
