@@ -2,8 +2,6 @@
 
 Desktop app that slices long-form video into short clips and applies configurable per-clip effects to defeat duplicate-detection systems on short-form video platforms.
 
-> **Status:** In active development. See [`docs/superpowers/specs/`](docs/superpowers/specs/) for the current milestone plans.
-
 ## Prerequisites
 
 - Windows 10/11 (primary target). macOS/Linux are best-effort.
@@ -41,7 +39,6 @@ src/clipforge/      # application package
 resources/          # bundled assets (fonts, themes, presets, ffmpeg)
 scripts/            # build & maintenance scripts
 tests/              # pytest suite
-docs/               # specs, plans, qa
 ```
 
 ## License
