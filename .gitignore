@@ -9,6 +9,7 @@ __pycache__/
 .ruff_cache/
 .coverage
 .coverage.*
+coverage.json
 htmlcov/
 coverage.xml
 
@@ -44,3 +45,6 @@ Thumbs.db
 .env.local
 
 docs/*
+
+# Local test media (user-supplied videos, not committed)
+test-video/

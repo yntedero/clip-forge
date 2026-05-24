@@ -156,3 +156,165 @@ def test_plain_slice_has_no_effects() -> None:
         "film_grain",
     ):
         assert getattr(ps.effects, name).enabled is False
+
+
+def test_discover_user_presets_returns_files(tmp_path: Path) -> None:
+    from clipforge.core.models import (
+        EffectsConfig,
+        EffectSettings,
+        OutputConfig,
+        Preset,
+        SlicingConfig,
+    )
+    from clipforge.core.presets import discover_user_presets, save_preset_to_file
+
+    off = EffectSettings(enabled=False, intensity=0.0, probability=0.0)
+    p = Preset(
+        name="UserOne",
+        slicing=SlicingConfig(min_length_sec=3, max_length_sec=5),
+        effects=EffectsConfig(
+            global_intensity=1.0,
+            mirror=off,
+            zoom=off,
+            speed=off,
+            color=off,
+            rotation=off,
+            edge_crop=off,
+            noise=off,
+            vignette=off,
+            pixel_shift=off,
+            film_grain=off,
+        ),
+        output=OutputConfig(
+            aspect="9:16",
+            codec="libx264",
+            quality="balanced",
+            audio_mode="keep",
+        ),
+        mode="clips",
+    )
+    save_preset_to_file(p, tmp_path / "one.cfp.json")
+    save_preset_to_file(p.model_copy(update={"name": "UserTwo"}), tmp_path / "two.cfp.json")
+    # A non-cfp.json file should be ignored
+    (tmp_path / "notapreset.txt").write_text("noise")
+    presets = discover_user_presets(tmp_path)
+    names = sorted(pr.name for pr in presets)
+    assert names == ["UserOne", "UserTwo"]
+
+
+def test_discover_user_presets_missing_dir_returns_empty(tmp_path: Path) -> None:
+    from clipforge.core.presets import discover_user_presets
+
+    assert discover_user_presets(tmp_path / "does_not_exist") == []
+
+
+def test_load_preset_from_file_missing_raises() -> None:
+    from clipforge.core.exceptions import PresetError
+    from clipforge.core.presets import load_preset_from_file
+
+    with pytest.raises(PresetError):
+        load_preset_from_file(Path("/definitely/does/not/exist.cfp.json"))
+
+
+def test_save_preset_to_file_propagates_os_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    from clipforge.core.exceptions import PresetError
+    from clipforge.core.models import (
+        EffectsConfig,
+        EffectSettings,
+        OutputConfig,
+        Preset,
+        SlicingConfig,
+    )
+    from clipforge.core.presets import save_preset_to_file
+
+    off = EffectSettings(enabled=False, intensity=0.0, probability=0.0)
+    p = Preset(
+        name="X",
+        slicing=SlicingConfig(min_length_sec=3, max_length_sec=5),
+        effects=EffectsConfig(
+            global_intensity=1.0,
+            mirror=off,
+            zoom=off,
+            speed=off,
+            color=off,
+            rotation=off,
+            edge_crop=off,
+            noise=off,
+            vignette=off,
+            pixel_shift=off,
+            film_grain=off,
+        ),
+        output=OutputConfig(
+            aspect="9:16",
+            codec="libx264",
+            quality="balanced",
+            audio_mode="keep",
+        ),
+        mode="clips",
+    )
+
+    # Force os.replace to fail to exercise the OSError branch.
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise OSError("simulated disk full")
+
+    monkeypatch.setattr(os, "replace", boom)
+    with pytest.raises(PresetError, match="cannot write preset"):
+        save_preset_to_file(p, tmp_path / "out.cfp.json")
+
+
+def test_discover_builtins_validates_builtin_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from clipforge.core.exceptions import PresetError
+
+    # Mock load_preset_from_file to return a preset with builtin=False
+    from clipforge.core.models import (
+        EffectsConfig,
+        EffectSettings,
+        OutputConfig,
+        Preset,
+        SlicingConfig,
+    )
+    from clipforge.core.presets import discover_builtins
+
+    off = EffectSettings(enabled=False, intensity=0.0, probability=0.0)
+    bad_preset = Preset(
+        name="NotBuiltin",
+        slicing=SlicingConfig(min_length_sec=3, max_length_sec=5),
+        effects=EffectsConfig(
+            global_intensity=1.0,
+            mirror=off,
+            zoom=off,
+            speed=off,
+            color=off,
+            rotation=off,
+            edge_crop=off,
+            noise=off,
+            vignette=off,
+            pixel_shift=off,
+            film_grain=off,
+        ),
+        output=OutputConfig(
+            aspect="9:16",
+            codec="libx264",
+            quality="balanced",
+            audio_mode="keep",
+        ),
+        mode="clips",
+        builtin=False,  # This should trigger the error
+    )
+
+    def mock_load(*_args: object, **_kwargs: object) -> Preset:
+        return bad_preset
+
+    monkeypatch.setattr("clipforge.core.presets.load_preset_from_file", mock_load)
+    monkeypatch.setattr("clipforge.core.presets._resolve_resources_dir", lambda _: tmp_path)
+    # Create a fake preset file so glob finds it
+    (tmp_path / "fake.json").write_text("{}")
+
+    with pytest.raises(PresetError, match="loaded but builtin flag is False"):
+        discover_builtins()
