@@ -9,7 +9,7 @@ def test_package_imports() -> None:
     import clipforge
 
     assert isinstance(clipforge.__version__, str)
-    assert clipforge.__version__ == "1.0.2"
+    assert clipforge.__version__ == "1.0.3"
 
 
 def test_constants_present() -> None:

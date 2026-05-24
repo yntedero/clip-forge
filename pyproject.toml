@@ -92,9 +92,10 @@ module = [
     "clipforge.job_runner",
     "clipforge.infra.ffmpeg",
     "clipforge.infra.ffprobe",
+    "clipforge.widgets",
 ]
 # PySide6 ships no stubs; suppress errors that arise from untyped Qt bases.
-disable_error_code = ["misc", "no-any-return", "unused-ignore"]
+disable_error_code = ["misc", "no-any-return", "unused-ignore", "union-attr", "attr-defined"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -96,6 +96,19 @@ _TRANSLATIONS: dict[LocaleCode, dict[str, str]] = {
         "Balanced": "Збалансовано",
         "High Quality": "Висока якість",
         "Original": "Оригінал",
+        # v1.0.3 additions
+        "Save current as preset…": "Зберегти як пресет…",
+        "Preset name": "Назва пресета",
+        "Name your preset": "Назвіть свій пресет",
+        "Preset saved": "Пресет збережено",
+        "Change…": "Змінити…",
+        "Choose a video to begin": "Виберіть відео, щоб почати",
+        "Effect": "Ефект",
+        "Length": "Тривалість",
+        "From": "Від",
+        "To": "До",
+        "Custom configuration": "Власні налаштування",
+        "A preset with that name already exists.": "Пресет з такою назвою вже існує.",
     },
 }
 

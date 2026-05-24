@@ -1,27 +1,37 @@
-"""Application bootstrap and main window.
+"""ClipForge main window and application bootstrap (v1.0.3).
 
-UI: drop or browse for a video, pick a preset (card grid; Custom expands
-into a configurator), pick an output folder, hit Start, watch clips
-appear in the output folder. Footer flag toggles between English and
-Ukrainian.
+Layout: slim drop bar (top), preset tabs (header), 2-column body
+(config | output+log), status bar with language toggle and Start/Cancel.
+
+UX rules:
+- All 10 effect rows always render; effects disabled by the active preset
+  are shown greyed but visible.
+- Numeric inputs are authoritative; sliders are companions and ignore
+  mouse wheel.
+- Editing any value while a built-in preset tab is active flips the
+  active tab to Custom, preserving the edit.
+- Users can save the current configuration as a named preset; saved
+  presets appear as additional tabs between built-ins and Custom on
+  next launch.
 """
 
 from __future__ import annotations
 
 import sys
+import unicodedata
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent, QIcon, QPixmap
+from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
     QFileDialog,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -29,9 +39,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
-    QScrollArea,
-    QSizePolicy,
-    QSlider,
+    QSplitter,
     QStatusBar,
     QVBoxLayout,
     QWidget,
@@ -46,12 +54,27 @@ from clipforge.core.models import (
     Preset,
     SlicingConfig,
 )
-from clipforge.core.presets import discover_builtins
+from clipforge.core.presets import (
+    discover_builtins,
+    discover_user_presets,
+    save_preset_to_file,
+)
 from clipforge.i18n import manager as i18n_manager
 from clipforge.i18n import tr
-from clipforge.infra.paths import default_output_dir, ffmpeg_path, resources_dir
+from clipforge.infra.paths import (
+    app_data_dir,
+    default_output_dir,
+    ffmpeg_path,
+    resources_dir,
+)
 from clipforge.job_runner import JobRunner
 from clipforge.version import __version__
+from clipforge.widgets import (
+    EffectRow,
+    NoWheelDoubleSpinBox,
+    NoWheelSlider,
+    NoWheelSpinBox,
+)
 
 VIDEO_EXTENSIONS = {
     ".mp4",
@@ -67,7 +90,15 @@ VIDEO_EXTENSIONS = {
     ".ts",
 }
 
-EFFECT_ORDER = (
+# Only these three built-ins surface as tabs. The other JSON files in
+# resources/presets/ are kept on disk for users who copy them out.
+ACTIVE_BUILTIN_PRESETS: tuple[str, ...] = (
+    "TikTok Soft",
+    "Instagram Reels",
+    "YouTube Shorts",
+)
+
+EFFECT_ORDER: tuple[tuple[str, str], ...] = (
     ("mirror", "Mirror"),
     ("zoom", "Zoom"),
     ("speed", "Speed"),
@@ -92,7 +123,6 @@ def _load_stylesheet() -> str:
 
 
 def _icon_path() -> Path | None:
-    """Find the app icon (.ico preferred, .png fallback)."""
     candidates = [
         resources_dir() / "icons" / "app.ico",
         resources_dir() / "icons" / "app.png",
@@ -112,9 +142,28 @@ def _app_icon() -> QIcon:
     return QIcon(str(p))
 
 
+def _user_presets_dir() -> Path:
+    """Where user-saved `.cfp.json` presets live."""
+    return app_data_dir() / "presets"
+
+
+def _slugify(name: str) -> str:
+    nfkd = unicodedata.normalize("NFKD", name)
+    safe = "".join(ch if ch.isalnum() or ch in "-_ " else "_" for ch in nfkd)
+    return safe.strip().replace(" ", "_").lower() or "preset"
+
+
 class ClipForgeApp(QApplication):
     def __init__(self, argv: list[str]) -> None:
         super().__init__(argv)
+        # Force the Fusion style — the Windows native style ignores some
+        # QSS rules (notably QComboBox text colour), which made our cyan
+        # combos render as blank boxes on Windows.
+        from PySide6.QtWidgets import QStyleFactory
+
+        fusion = QStyleFactory.create("Fusion")
+        if fusion is not None:
+            self.setStyle(fusion)
         self.setOrganizationName(constants.APP_ORG)
         self.setOrganizationDomain(constants.APP_ORG_DOMAIN)
         self.setApplicationName(constants.APP_NAME)
@@ -132,59 +181,78 @@ def _load_m0_stylesheet() -> str:  # pragma: no cover - back-compat shim
     return text
 
 
-class DropZone(QFrame):
-    def __init__(self, parent: MainWindow) -> None:
+class DropBar(QFrame):
+    """Slim full-width drop target — collapses to filename once loaded."""
+
+    def __init__(
+        self, on_file_chosen: Callable[[Path], None], parent: QWidget | None = None
+    ) -> None:
         super().__init__(parent)
-        self._main = parent
-        self.setObjectName("dropZone")
+        self._on_file_chosen = on_file_chosen
+        self.setObjectName("dropBar")
         self.setAcceptDrops(True)
         self.setProperty("dragOver", False)
-        self.setMinimumHeight(180)
-        layout = QVBoxLayout(self)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setProperty("loaded", False)
+        self.setMinimumHeight(56)
 
-        icon_path = _icon_path()
-        if icon_path is not None and icon_path.suffix == ".png":
-            self._icon = QLabel(self)
-            pix = QPixmap(str(icon_path)).scaledToHeight(
-                72, Qt.TransformationMode.SmoothTransformation
-            )
-            self._icon.setPixmap(pix)
-        else:
-            self._icon = QLabel("✂", self)  # scissors codepoint
-            self._icon.setStyleSheet("color: #22D3EE; font-size: 52px; font-weight: 700;")
-        self._icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(16, 8, 12, 8)
+        layout.setSpacing(10)
+
+        self._icon = QLabel("✂", self)
+        self._icon.setStyleSheet("color: #22D3EE; font-size: 22px; font-weight: 700;")
         layout.addWidget(self._icon)
 
         self._title = QLabel(tr("Drop a video here, or click to browse"), self)
-        self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._title.setProperty("role", "subtitle")
-        layout.addWidget(self._title)
+        self._title.setStyleSheet("color: #ECFEFF; font-size: 14px;")
+        layout.addWidget(self._title, 1)
 
-        self._hint = QLabel(
-            tr("Supported:") + " " + ", ".join(sorted(VIDEO_EXTENSIONS)),
-            self,
-        )
-        self._hint.setProperty("role", "caption")
-        self._hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._hint.setWordWrap(True)
-        layout.addWidget(self._hint)
+        self._sub = QLabel("", self)
+        self._sub.setProperty("role", "caption")
+        layout.addWidget(self._sub)
+
+        self._change_btn = QPushButton(tr("Change…"), self)
+        self._change_btn.setProperty("role", "secondary")
+        self._change_btn.setVisible(False)
+        self._change_btn.clicked.connect(self._open_dialog)
+        layout.addWidget(self._change_btn)
 
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
-    def retranslate(self) -> None:
-        if self._main.source_path is None:
+    def retranslate(self, loaded: bool) -> None:
+        if not loaded:
             self._title.setText(tr("Drop a video here, or click to browse"))
-            self._hint.setText(tr("Supported:") + " " + ", ".join(sorted(VIDEO_EXTENSIONS)))
+        self._change_btn.setText(tr("Change…"))
+
+    def set_loaded(self, path: Path) -> None:
+        self._icon.setText("🎬")
+        self._title.setText(path.name)
+        self._sub.setText(str(path.parent))
+        self._change_btn.setVisible(True)
+        self.setProperty("loaded", True)
+        self.style().unpolish(self)
+        self.style().polish(self)
 
     def mousePressEvent(self, event: object) -> None:  # noqa: N802
         from PySide6.QtCore import QEvent
         from PySide6.QtGui import QMouseEvent
 
         if isinstance(event, QMouseEvent) and event.button() == Qt.MouseButton.LeftButton:
-            self._main.open_file_dialog()
+            self._open_dialog()
         if isinstance(event, QEvent):
             super().mousePressEvent(event)  # type: ignore[arg-type]
+
+    def _open_dialog(self) -> None:
+        filters = (
+            tr("Choose a source video")
+            + " ("
+            + " ".join(f"*{ext}" for ext in sorted(VIDEO_EXTENSIONS))
+            + ");;All files (*.*)"
+        )
+        path_str, _ = QFileDialog.getOpenFileName(self, tr("Choose a source video"), "", filters)
+        if path_str:
+            self._on_file_chosen(Path(path_str))
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # noqa: N802
         if event.mimeData().hasUrls():
@@ -208,121 +276,288 @@ class DropZone(QFrame):
         self.style().polish(self)
         for url in event.mimeData().urls():
             if url.isLocalFile():
-                path = Path(url.toLocalFile())
-                if path.suffix.lower() in VIDEO_EXTENSIONS:
-                    self._main.set_source(path)
+                p = Path(url.toLocalFile())
+                if p.suffix.lower() in VIDEO_EXTENSIONS:
+                    self._on_file_chosen(p)
                     event.acceptProposedAction()
                     return
         event.ignore()
 
-    def set_loaded(self, path: Path) -> None:
-        self._icon.setText("▶")  # play triangle
-        self._icon.setStyleSheet("color: #22D3EE; font-size: 52px; font-weight: 700;")
-        self._title.setText(path.name)
-        self._hint.setText(str(path.parent))
 
+class PresetTabs(QWidget):
+    """Horizontal row of preset selector buttons + 'Custom' at the end."""
 
-class PresetCard(QFrame):
-    """Single selectable preset tile."""
+    selected = Signal(str)  # emits the active name
 
     def __init__(
-        self,
-        preset_or_name: Preset | str,
-        description: str,
-        parent: QWidget,
-        on_click: Callable[[PresetCard], None],
+        self, builtin_names: list[str], user_names: list[str], parent: QWidget | None = None
     ) -> None:
         super().__init__(parent)
-        self.setObjectName("presetCard")
-        self.setProperty("selected", False)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setMinimumHeight(72)
-        self._on_click = on_click
-        self.preset: Preset | str = preset_or_name
+        self._buttons: dict[str, QPushButton] = {}
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(2)
-        name = preset_or_name.name if isinstance(preset_or_name, Preset) else preset_or_name
-        self._name = QLabel(tr(name), self)
-        self._name.setStyleSheet("color: #ECFEFF; font-weight: 600; font-size: 14px;")
-        layout.addWidget(self._name)
-        self._desc = QLabel(tr(description), self)
-        self._desc.setProperty("role", "caption")
-        self._desc.setWordWrap(True)
-        layout.addWidget(self._desc)
+        for name in builtin_names:
+            btn = self._mk(name)
+            layout.addWidget(btn)
+        if user_names:
+            sep = QLabel("·", self)
+            sep.setStyleSheet("color: #5E8290; padding: 0 4px;")
+            layout.addWidget(sep)
+            for name in user_names:
+                btn = self._mk(name)
+                layout.addWidget(btn)
+        custom_btn = self._mk("Custom")
+        layout.addWidget(custom_btn)
+        layout.addStretch(1)
 
-        self._source_name = name
-        self._source_desc = description
+        self._active: str | None = None
+
+    def _mk(self, name: str) -> QPushButton:
+        btn = QPushButton(tr(name), self)
+        btn.setProperty("role", "tab")
+        btn.setProperty("active", False)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.clicked.connect(lambda _checked=False, n=name: self.set_active(n, emit=True))
+        self._buttons[name] = btn
+        return btn
+
+    def names(self) -> list[str]:
+        return list(self._buttons.keys())
 
     def retranslate(self) -> None:
-        self._name.setText(tr(self._source_name))
-        self._desc.setText(tr(self._source_desc))
+        for name, btn in self._buttons.items():
+            btn.setText(tr(name))
 
-    def set_selected(self, value: bool) -> None:
-        self.setProperty("selected", value)
-        self.style().unpolish(self)
-        self.style().polish(self)
+    def active(self) -> str | None:
+        return self._active
 
-    def mousePressEvent(self, event: object) -> None:  # noqa: N802
-        from PySide6.QtCore import QEvent
-        from PySide6.QtGui import QMouseEvent
+    def set_active(self, name: str, *, emit: bool = False) -> None:
+        if name not in self._buttons:
+            return
+        self._active = name
+        for n, b in self._buttons.items():
+            b.setProperty("active", n == name)
+            b.style().unpolish(b)
+            b.style().polish(b)
+        if emit:
+            self.selected.emit(name)
 
-        if isinstance(event, QMouseEvent) and event.button() == Qt.MouseButton.LeftButton:
-            self._on_click(self)
-        if isinstance(event, QEvent):
-            super().mousePressEvent(event)  # type: ignore[arg-type]
+    def add_button(self, name: str) -> None:
+        if name in self._buttons:
+            return
+        # Insert before Custom (always last user-visible button).
+        layout = self.layout()
+        custom_btn = self._buttons.get("Custom")
+        btn = self._mk(name)
+        if custom_btn is not None and layout is not None:
+            idx = layout.indexOf(custom_btn)
+            layout.insertWidget(idx, btn)
+        else:
+            assert layout is not None
+            layout.addWidget(btn)
 
 
-class CustomConfigPanel(QFrame):
-    """Configurator for the Custom preset - every dial exposed."""
+class MainWindow(QMainWindow):
+    """Primary window for v1.0.3."""
 
-    def __init__(self, parent: QWidget) -> None:
-        super().__init__(parent)
-        self.setProperty("role", "card")
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(14, 12, 14, 12)
-        outer.setSpacing(10)
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle(constants.WINDOW_TITLE)
+        self.setMinimumSize(constants.WINDOW_MIN_WIDTH, constants.WINDOW_MIN_HEIGHT)
+        self.resize(constants.WINDOW_DEFAULT_WIDTH, constants.WINDOW_DEFAULT_HEIGHT)
+        icon = _app_icon()
+        if not icon.isNull():
+            self.setWindowIcon(icon)
 
-        self._title = QLabel(tr("Custom") + " - " + tr("Configure everything yourself"), self)
-        self._title.setStyleSheet("color: #ECFEFF; font-weight: 600;")
-        outer.addWidget(self._title)
+        self.source_path: Path | None = None
+        self._filling_from_preset = False  # suppresses Custom-flip while we fill
+        # Combo-section labels are populated dynamically by ``col()`` but
+        # declared here so mypy can see them.
+        self._aspect_label: QLabel | None = None
+        self._codec_label: QLabel | None = None
+        self._quality_label: QLabel | None = None
+        self._audio_label: QLabel | None = None
 
-        # Length range
+        # Preset catalogue
+        all_builtins = {p.name: p for p in discover_builtins()}
+        self._builtins: dict[str, Preset] = {
+            n: all_builtins[n] for n in ACTIVE_BUILTIN_PRESETS if n in all_builtins
+        }
+        self._user_presets: dict[str, Preset] = {
+            p.name: p for p in discover_user_presets(_user_presets_dir())
+        }
+
+        self._runner = JobRunner(self)
+        self._runner.progress.connect(self._on_progress)
+        self._runner.clip_finished.connect(self._on_clip_finished)
+        self._runner.job_finished.connect(self._on_job_finished)
+        self._runner.job_failed.connect(self._on_job_failed)
+        self._runner.log.connect(self._on_log)
+
+        i18n_manager().locale_changed.connect(lambda _code: self._retranslate())
+
+        central = QWidget(self)
+        central.setObjectName("central")
+        self.setCentralWidget(central)
+        outer = QVBoxLayout(central)
+        outer.setContentsMargins(20, 16, 20, 8)
+        outer.setSpacing(12)
+
+        # Drop bar
+        self._drop = DropBar(self.set_source, central)
+        outer.addWidget(self._drop)
+
+        # Preset tabs
+        self._tabs = PresetTabs(
+            list(self._builtins.keys()),
+            list(self._user_presets.keys()),
+            central,
+        )
+        self._tabs.selected.connect(self._on_tab_selected)
+        outer.addWidget(self._tabs)
+
+        # Body splitter
+        splitter = QSplitter(Qt.Orientation.Horizontal, central)
+        splitter.setHandleWidth(8)
+        splitter.setChildrenCollapsible(False)
+        outer.addWidget(splitter, 1)
+
+        # Left: config card
+        self._config_card = self._build_config_card()
+        splitter.addWidget(self._config_card)
+
+        # Right: output card
+        self._output_card = self._build_output_card()
+        splitter.addWidget(self._output_card)
+
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        splitter.setSizes([720, 460])
+
+        # Status bar
+        sb = QStatusBar(self)
+        self.setStatusBar(sb)
+        self._lang_en_btn = QPushButton(self._flag_for("en") + "  EN", self)
+        self._lang_en_btn.setProperty("role", "ghost")
+        self._lang_en_btn.setFlat(True)
+        self._lang_en_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._lang_en_btn.clicked.connect(lambda: i18n_manager().set_locale("en"))
+        sb.addWidget(self._lang_en_btn)
+        self._lang_uk_btn = QPushButton(self._flag_for("uk") + "  UK", self)
+        self._lang_uk_btn.setProperty("role", "ghost")
+        self._lang_uk_btn.setFlat(True)
+        self._lang_uk_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._lang_uk_btn.clicked.connect(lambda: i18n_manager().set_locale("uk"))
+        sb.addWidget(self._lang_uk_btn)
+
+        self._status_msg = QLabel("", self)
+        sb.addPermanentWidget(self._status_msg)
+
+        self._cancel_btn = QPushButton(tr("Cancel"), self)
+        self._cancel_btn.setProperty("role", "secondary")
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.clicked.connect(self._cancel)
+        sb.addPermanentWidget(self._cancel_btn)
+
+        self._start_btn = QPushButton(tr("Start"), self)
+        self._start_btn.setObjectName("startButton")
+        self._start_btn.setEnabled(False)
+        self._start_btn.clicked.connect(self._start_job)
+        sb.addPermanentWidget(self._start_btn)
+
+        self._refresh_status_bar()
+        self._refresh_lang_buttons()
+
+        # Initial tab — pick first built-in if any.
+        if self._builtins:
+            first = next(iter(self._builtins.keys()))
+            self._tabs.set_active(first, emit=True)
+        else:
+            self._tabs.set_active("Custom", emit=True)
+
+    # ----- card builders -----
+
+    def _build_config_card(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("card")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(16, 14, 16, 14)
+        v.setSpacing(10)
+
+        # Clip length row
         len_row = QHBoxLayout()
-        self._min_label = QLabel(tr("min"), self)
-        self._min_label.setProperty("role", "caption")
-        len_row.addWidget(self._min_label)
-        self._min_value = QLabel("3.0s", self)
-        len_row.addWidget(self._min_value)
-        self._min_slider = QSlider(Qt.Orientation.Horizontal, self)
-        self._min_slider.setRange(5, 600)
-        self._min_slider.setValue(30)
-        self._min_slider.valueChanged.connect(self._on_min_changed)
-        len_row.addWidget(self._min_slider, 1)
-        outer.addLayout(len_row)
+        len_row.setSpacing(8)
+        self._len_label = QLabel(tr("Length"), card)
+        self._len_label.setProperty("role", "subtitle")
+        self._len_label.setFixedWidth(140)
+        len_row.addWidget(self._len_label)
+        self._from_label = QLabel(tr("From"), card)
+        self._from_label.setProperty("role", "caption")
+        len_row.addWidget(self._from_label)
+        self._min_spin = NoWheelDoubleSpinBox(card)
+        self._min_spin.setRange(0.5, 600.0)
+        self._min_spin.setDecimals(1)
+        self._min_spin.setSingleStep(0.5)
+        self._min_spin.setSuffix(" s")
+        self._min_spin.setFixedWidth(96)
+        self._min_spin.valueChanged.connect(self._on_value_changed)
+        self._min_spin.valueChanged.connect(self._enforce_min_le_max)
+        len_row.addWidget(self._min_spin)
+        self._to_label = QLabel(tr("To"), card)
+        self._to_label.setProperty("role", "caption")
+        len_row.addWidget(self._to_label)
+        self._max_spin = NoWheelDoubleSpinBox(card)
+        self._max_spin.setRange(0.5, 600.0)
+        self._max_spin.setDecimals(1)
+        self._max_spin.setSingleStep(0.5)
+        self._max_spin.setSuffix(" s")
+        self._max_spin.setFixedWidth(96)
+        self._max_spin.valueChanged.connect(self._on_value_changed)
+        self._max_spin.valueChanged.connect(self._enforce_min_le_max)
+        len_row.addWidget(self._max_spin)
+        len_row.addStretch(1)
+        v.addLayout(len_row)
 
-        max_row = QHBoxLayout()
-        self._max_label = QLabel(tr("max"), self)
-        self._max_label.setProperty("role", "caption")
-        max_row.addWidget(self._max_label)
-        self._max_value = QLabel("8.0s", self)
-        max_row.addWidget(self._max_value)
-        self._max_slider = QSlider(Qt.Orientation.Horizontal, self)
-        self._max_slider.setRange(5, 600)
-        self._max_slider.setValue(80)
-        self._max_slider.valueChanged.connect(self._on_max_changed)
-        max_row.addWidget(self._max_slider, 1)
-        outer.addLayout(max_row)
+        # Global intensity row
+        gi_row = QHBoxLayout()
+        gi_row.setSpacing(8)
+        self._gi_label = QLabel(tr("Global intensity"), card)
+        self._gi_label.setProperty("role", "subtitle")
+        self._gi_label.setFixedWidth(140)
+        gi_row.addWidget(self._gi_label)
+        self._gi_spin = NoWheelSpinBox(card)
+        self._gi_spin.setRange(0, 150)
+        self._gi_spin.setSuffix(" %")
+        self._gi_spin.setFixedWidth(80)
+        self._gi_spin.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self._gi_spin.valueChanged.connect(self._on_global_intensity_spin)
+        gi_row.addWidget(self._gi_spin)
+        self._gi_slider = NoWheelSlider(Qt.Orientation.Horizontal, card)
+        self._gi_slider.setRange(0, 150)
+        self._gi_slider.valueChanged.connect(self._on_global_intensity_slider)
+        gi_row.addWidget(self._gi_slider, 1)
+        v.addLayout(gi_row)
 
-        # Output config row
-        out_row = QHBoxLayout()
-        out_row.setSpacing(10)
-        self._aspect_label = QLabel(tr("Aspect ratio"), self)
-        self._aspect_label.setProperty("role", "caption")
-        out_row.addWidget(self._aspect_label)
-        self._aspect = QComboBox(self)
+        # Output configuration row (two columns of combos)
+        out_grid = QHBoxLayout()
+        out_grid.setSpacing(12)
+
+        def col(label_src: str, combo: QComboBox, label_attr: str) -> QWidget:
+            wrap = QWidget(card)
+            wl = QVBoxLayout(wrap)
+            wl.setContentsMargins(0, 0, 0, 0)
+            wl.setSpacing(3)
+            lbl = QLabel(tr(label_src), wrap)
+            lbl.setProperty("role", "caption")
+            wl.addWidget(lbl)
+            combo.setMinimumWidth(140)
+            wl.addWidget(combo)
+            setattr(self, label_attr, lbl)
+            return wrap
+
+        self._aspect = QComboBox(card)
         for value, label in (
             ("original", "Original"),
             ("9:16", "9:16"),
@@ -331,13 +566,10 @@ class CustomConfigPanel(QFrame):
             ("4:5", "4:5"),
         ):
             self._aspect.addItem(tr(label) if label == "Original" else label, value)
-        self._aspect.setCurrentIndex(1)
-        out_row.addWidget(self._aspect, 1)
+        self._aspect.currentIndexChanged.connect(self._on_value_changed)
+        out_grid.addWidget(col("Aspect ratio", self._aspect, "_aspect_label"))
 
-        self._codec_label = QLabel(tr("Codec"), self)
-        self._codec_label.setProperty("role", "caption")
-        out_row.addWidget(self._codec_label)
-        self._codec = QComboBox(self)
+        self._codec = QComboBox(card)
         for value, label in (
             ("libx264", "H.264 (libx264)"),
             ("libx265", "H.265 (libx265)"),
@@ -346,142 +578,141 @@ class CustomConfigPanel(QFrame):
             ("h264_amf", "H.264 AMF"),
         ):
             self._codec.addItem(label, value)
-        out_row.addWidget(self._codec, 1)
+        self._codec.currentIndexChanged.connect(self._on_value_changed)
+        out_grid.addWidget(col("Codec", self._codec, "_codec_label"))
 
-        self._quality_label = QLabel(tr("Quality"), self)
-        self._quality_label.setProperty("role", "caption")
-        out_row.addWidget(self._quality_label)
-        self._quality = QComboBox(self)
+        self._quality = QComboBox(card)
         for value, label in (
             ("fast", "Fast"),
             ("balanced", "Balanced"),
             ("high", "High Quality"),
         ):
             self._quality.addItem(tr(label), value)
-        self._quality.setCurrentIndex(1)
-        out_row.addWidget(self._quality, 1)
-        outer.addLayout(out_row)
+        self._quality.currentIndexChanged.connect(self._on_value_changed)
+        out_grid.addWidget(col("Quality", self._quality, "_quality_label"))
 
-        # Audio mode
-        audio_row = QHBoxLayout()
-        self._audio_label = QLabel(tr("Audio"), self)
-        self._audio_label.setProperty("role", "caption")
-        audio_row.addWidget(self._audio_label)
-        self._audio = QComboBox(self)
+        self._audio = QComboBox(card)
         for value, label in (
             ("keep", "Keep audio"),
             ("mute", "Mute"),
             ("remove", "Remove track"),
         ):
             self._audio.addItem(tr(label), value)
-        audio_row.addWidget(self._audio, 1)
-        self._pitch = QCheckBox(tr("Pitch preservation"), self)
-        audio_row.addWidget(self._pitch)
-        outer.addLayout(audio_row)
+        self._audio.currentIndexChanged.connect(self._on_value_changed)
+        out_grid.addWidget(col("Audio", self._audio, "_audio_label"))
+        v.addLayout(out_grid)
 
-        # Global intensity
-        gi_row = QHBoxLayout()
-        self._gi_label = QLabel(tr("Global intensity"), self)
-        self._gi_label.setProperty("role", "caption")
-        gi_row.addWidget(self._gi_label)
-        self._gi_value = QLabel("100%", self)
-        gi_row.addWidget(self._gi_value)
-        self._gi_slider = QSlider(Qt.Orientation.Horizontal, self)
-        self._gi_slider.setRange(0, 150)
-        self._gi_slider.setValue(100)
-        self._gi_slider.valueChanged.connect(lambda v: self._gi_value.setText(f"{v}%"))
-        gi_row.addWidget(self._gi_slider, 1)
-        outer.addLayout(gi_row)
+        # Pitch preservation
+        self._pitch = QCheckBox(tr("Pitch preservation"), card)
+        self._pitch.toggled.connect(self._on_value_changed)
+        v.addWidget(self._pitch)
 
-        # Effects grid
-        self._effects_heading = QLabel(tr("Effects"), self)
-        self._effects_heading.setProperty("role", "subtitle")
-        outer.addWidget(self._effects_heading)
+        # Effects header + rows
+        self._effects_header = QLabel(tr("Effects"), card)
+        self._effects_header.setProperty("role", "subtitle")
+        v.addWidget(self._effects_header)
 
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(6)
-        self._effect_checks: dict[str, QCheckBox] = {}
-        self._effect_sliders: dict[str, QSlider] = {}
-        self._effect_value_labels: dict[str, QLabel] = {}
-        self._effect_label_sources: dict[str, str] = {}
+        self._effect_rows: dict[str, EffectRow] = {}
+        for field, label in EFFECT_ORDER:
+            row = EffectRow(field, tr(label), card)
+            row.changed.connect(self._on_value_changed)
+            self._effect_rows[field] = row
+            v.addWidget(row)
 
-        for row, (field, label) in enumerate(EFFECT_ORDER):
-            cb = QCheckBox(tr(label), self)
-            cb.setChecked(True)
-            grid.addWidget(cb, row, 0)
-            slider = QSlider(Qt.Orientation.Horizontal, self)
-            slider.setRange(0, 100)
-            slider.setValue(60)
-            grid.addWidget(slider, row, 1)
-            val = QLabel("60%", self)
-            val.setProperty("role", "caption")
-            slider.valueChanged.connect(lambda v, lbl=val: lbl.setText(f"{v}%"))
-            grid.addWidget(val, row, 2)
-            self._effect_checks[field] = cb
-            self._effect_sliders[field] = slider
-            self._effect_value_labels[field] = val
-            self._effect_label_sources[field] = label
-        outer.addLayout(grid)
+        v.addStretch(1)
+        return card
 
-    def retranslate(self) -> None:
-        self._title.setText(tr("Custom") + " - " + tr("Configure everything yourself"))
-        self._min_label.setText(tr("min"))
-        self._max_label.setText(tr("max"))
-        self._aspect_label.setText(tr("Aspect ratio"))
-        self._codec_label.setText(tr("Codec"))
-        self._quality_label.setText(tr("Quality"))
-        self._audio_label.setText(tr("Audio"))
-        self._gi_label.setText(tr("Global intensity"))
-        self._effects_heading.setText(tr("Effects"))
-        self._pitch.setText(tr("Pitch preservation"))
-        idx = self._aspect.findData("original")
-        if idx >= 0:
-            self._aspect.setItemText(idx, tr("Original"))
-        label_map_q = {"fast": "Fast", "balanced": "Balanced", "high": "High Quality"}
-        for i in range(self._quality.count()):
-            data = self._quality.itemData(i)
-            if data in label_map_q:
-                self._quality.setItemText(i, tr(label_map_q[data]))
-        label_map_a = {"keep": "Keep audio", "mute": "Mute", "remove": "Remove track"}
-        for i in range(self._audio.count()):
-            data = self._audio.itemData(i)
-            if data in label_map_a:
-                self._audio.setItemText(i, tr(label_map_a[data]))
-        for field, label_src in self._effect_label_sources.items():
-            self._effect_checks[field].setText(tr(label_src))
+    def _build_output_card(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("card")
+        v = QVBoxLayout(card)
+        v.setContentsMargins(16, 14, 16, 14)
+        v.setSpacing(10)
 
-    def _on_min_changed(self, value: int) -> None:
-        seconds = value / 10.0
-        self._min_value.setText(f"{seconds:.1f}s")
-        if value > self._max_slider.value():
-            self._max_slider.setValue(value)
+        self._out_label = QLabel(tr("Output folder"), card)
+        self._out_label.setProperty("role", "subtitle")
+        v.addWidget(self._out_label)
 
-    def _on_max_changed(self, value: int) -> None:
-        seconds = value / 10.0
-        self._max_value.setText(f"{seconds:.1f}s")
-        if value < self._min_slider.value():
-            self._min_slider.setValue(value)
+        out_row = QHBoxLayout()
+        self._out_field = QLineEdit(str(default_output_dir()), card)
+        out_row.addWidget(self._out_field, 1)
+        self._browse_btn = QPushButton(tr("Browse…"), card)
+        self._browse_btn.setProperty("role", "secondary")
+        self._browse_btn.clicked.connect(self._choose_output_dir)
+        out_row.addWidget(self._browse_btn)
+        self._open_out_btn = QPushButton(tr("Open"), card)
+        self._open_out_btn.setProperty("role", "secondary")
+        self._open_out_btn.clicked.connect(self._open_output_dir)
+        out_row.addWidget(self._open_out_btn)
+        v.addLayout(out_row)
 
-    def build_preset(self) -> Preset:
-        min_len = self._min_slider.value() / 10.0
-        max_len = self._max_slider.value() / 10.0
+        self._save_preset_btn = QPushButton(tr("Save current as preset…"), card)
+        self._save_preset_btn.setProperty("role", "secondary")
+        self._save_preset_btn.clicked.connect(self._save_as_preset)
+        v.addWidget(self._save_preset_btn)
+
+        self._progress = QProgressBar(card)
+        self._progress.setRange(0, 1)
+        self._progress.setValue(0)
+        self._progress.setFormat(tr("Idle"))
+        v.addWidget(self._progress)
+
+        self._log_label = QLabel(tr("Log"), card)
+        self._log_label.setProperty("role", "subtitle")
+        v.addWidget(self._log_label)
+        self._log = QPlainTextEdit(card)
+        self._log.setObjectName("logView")
+        self._log.setReadOnly(True)
+        v.addWidget(self._log, 1)
+        return card
+
+    # ----- preset I/O -----
+
+    def _fill_from_preset(self, preset: Preset) -> None:
+        self._filling_from_preset = True
+        try:
+            self._min_spin.setValue(preset.slicing.min_length_sec)
+            self._max_spin.setValue(preset.slicing.max_length_sec)
+            gi_pct = round(preset.effects.global_intensity * 100)
+            self._gi_spin.setValue(gi_pct)
+            self._gi_slider.setValue(gi_pct)
+
+            def _set_combo(combo: QComboBox, value: str) -> None:
+                idx = combo.findData(value)
+                if idx >= 0:
+                    combo.setCurrentIndex(idx)
+
+            _set_combo(self._aspect, preset.output.aspect)
+            _set_combo(self._codec, preset.output.codec)
+            _set_combo(self._quality, preset.output.quality)
+            _set_combo(self._audio, preset.output.audio_mode)
+            self._pitch.setChecked(preset.effects.pitch_preservation)
+
+            for field, _ in EFFECT_ORDER:
+                eff: EffectSettings = getattr(preset.effects, field)
+                self._effect_rows[field].set_values(
+                    enabled=eff.enabled,
+                    intensity_pct=round(eff.intensity * 100),
+                )
+        finally:
+            self._filling_from_preset = False
+
+    def _build_current_preset(self, name: str, *, builtin: bool) -> Preset:
         slicing = SlicingConfig(
             strategy="sequential",
-            min_length_sec=min_len,
-            max_length_sec=max_len,
+            min_length_sec=float(self._min_spin.value()),
+            max_length_sec=float(self._max_spin.value()),
         )
         effects_kwargs: dict[str, EffectSettings] = {}
         for field, _ in EFFECT_ORDER:
-            checked = self._effect_checks[field].isChecked()
-            intensity = self._effect_sliders[field].value() / 100.0
+            enabled, pct = self._effect_rows[field].values()
             effects_kwargs[field] = EffectSettings(
-                enabled=checked,
-                intensity=intensity,
+                enabled=enabled,
+                intensity=pct / 100.0,
                 probability=1.0,
             )
         effects = EffectsConfig(
-            global_intensity=self._gi_slider.value() / 100.0,
+            global_intensity=self._gi_spin.value() / 100.0,
             mirror=effects_kwargs["mirror"],
             zoom=effects_kwargs["zoom"],
             speed=effects_kwargs["speed"],
@@ -501,192 +732,16 @@ class CustomConfigPanel(QFrame):
             audio_mode=self._audio.currentData(),
         )
         return Preset(
-            name="Custom",
-            description="Configure everything yourself",
-            builtin=False,
+            name=name,
+            description=None,
+            builtin=builtin,
             slicing=slicing,
             effects=effects,
             output=output,
             mode="clips",
         )
 
-
-class MainWindow(QMainWindow):
-    """The single primary window."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.setWindowTitle(constants.WINDOW_TITLE)
-        self.setMinimumSize(constants.WINDOW_MIN_WIDTH, constants.WINDOW_MIN_HEIGHT)
-        self.resize(constants.WINDOW_DEFAULT_WIDTH, constants.WINDOW_DEFAULT_HEIGHT + 60)
-        icon = _app_icon()
-        if not icon.isNull():
-            self.setWindowIcon(icon)
-
-        self.source_path: Path | None = None
-        self._presets: list[Preset] = []
-        self._preset_cards: list[PresetCard] = []
-        self._selected_card: PresetCard | None = None
-
-        self._runner = JobRunner(self)
-        self._runner.progress.connect(self._on_progress)
-        self._runner.clip_finished.connect(self._on_clip_finished)
-        self._runner.job_finished.connect(self._on_job_finished)
-        self._runner.job_failed.connect(self._on_job_failed)
-        self._runner.log.connect(self._on_log)
-
-        i18n_manager().locale_changed.connect(lambda _code: self._retranslate())
-
-        central = QWidget(self)
-        central.setObjectName("central")
-        self.setCentralWidget(central)
-
-        root = QVBoxLayout(central)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
-        scroll = QScrollArea(central)
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll_inner = QWidget()
-        scroll.setWidget(scroll_inner)
-        root.addWidget(scroll, 1)
-
-        outer = QVBoxLayout(scroll_inner)
-        outer.setContentsMargins(32, 28, 32, 24)
-        outer.setSpacing(20)
-
-        self._heading = QLabel(tr("ClipForge"), scroll_inner)
-        self._heading.setProperty("role", "heading")
-        outer.addWidget(self._heading)
-
-        self._tagline = QLabel(
-            tr("Slice long videos into short clips with subtle randomized effects."),
-            scroll_inner,
-        )
-        self._tagline.setProperty("role", "subtitle")
-        outer.addWidget(self._tagline)
-
-        self._drop = DropZone(self)
-        outer.addWidget(self._drop)
-
-        self._preset_heading = QLabel(tr("Preset"), scroll_inner)
-        self._preset_heading.setProperty("role", "subtitle")
-        outer.addWidget(self._preset_heading)
-        self._preset_grid_container = QWidget(scroll_inner)
-        self._preset_grid = QGridLayout(self._preset_grid_container)
-        self._preset_grid.setHorizontalSpacing(12)
-        self._preset_grid.setVerticalSpacing(12)
-        outer.addWidget(self._preset_grid_container)
-
-        self._custom_panel = CustomConfigPanel(scroll_inner)
-        self._custom_panel.setVisible(False)
-        outer.addWidget(self._custom_panel)
-
-        # Output folder card
-        out_card = QFrame(scroll_inner)
-        out_card.setObjectName("card")
-        out_layout = QVBoxLayout(out_card)
-        out_layout.setContentsMargins(16, 14, 16, 14)
-        self._out_card_label = QLabel(tr("Output folder"), out_card)
-        self._out_card_label.setProperty("role", "subtitle")
-        out_layout.addWidget(self._out_card_label)
-        out_row = QHBoxLayout()
-        self._out_field = QLineEdit(str(default_output_dir()), out_card)
-        out_row.addWidget(self._out_field, 1)
-        self._out_browse = QPushButton(tr("Browse…"), out_card)
-        self._out_browse.setProperty("role", "secondary")
-        self._out_browse.clicked.connect(self._choose_output_dir)
-        out_row.addWidget(self._out_browse)
-        self._out_open = QPushButton(tr("Open"), out_card)
-        self._out_open.setProperty("role", "secondary")
-        self._out_open.clicked.connect(self._open_output_dir)
-        out_row.addWidget(self._out_open)
-        out_layout.addLayout(out_row)
-        outer.addWidget(out_card)
-
-        self._progress = QProgressBar(scroll_inner)
-        self._progress.setRange(0, 1)
-        self._progress.setValue(0)
-        self._progress.setFormat(tr("Idle"))
-        outer.addWidget(self._progress)
-
-        self._log = QPlainTextEdit(scroll_inner)
-        self._log.setObjectName("logView")
-        self._log.setReadOnly(True)
-        self._log.setMinimumHeight(120)
-        outer.addWidget(self._log, 1)
-
-        action_row = QHBoxLayout()
-        action_row.addStretch(1)
-        self._cancel_btn = QPushButton(tr("Cancel"), scroll_inner)
-        self._cancel_btn.setProperty("role", "secondary")
-        self._cancel_btn.setEnabled(False)
-        self._cancel_btn.clicked.connect(self._cancel)
-        action_row.addWidget(self._cancel_btn)
-        self._start_btn = QPushButton(tr("Start"), scroll_inner)
-        self._start_btn.setObjectName("startButton")
-        self._start_btn.setEnabled(False)
-        self._start_btn.clicked.connect(self._start_job)
-        action_row.addWidget(self._start_btn)
-        outer.addLayout(action_row)
-
-        sb = QStatusBar(self)
-        self.setStatusBar(sb)
-        self._lang_en_btn = QPushButton(self._flag_for("en") + "  EN", self)
-        self._lang_en_btn.setProperty("role", "ghost")
-        self._lang_en_btn.setFlat(True)
-        self._lang_en_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._lang_en_btn.clicked.connect(lambda: i18n_manager().set_locale("en"))
-        sb.addWidget(self._lang_en_btn)
-        self._lang_uk_btn = QPushButton(self._flag_for("uk") + "  UK", self)
-        self._lang_uk_btn.setProperty("role", "ghost")
-        self._lang_uk_btn.setFlat(True)
-        self._lang_uk_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._lang_uk_btn.clicked.connect(lambda: i18n_manager().set_locale("uk"))
-        sb.addWidget(self._lang_uk_btn)
-
-        self._status_msg = QLabel("", self)
-        sb.addPermanentWidget(self._status_msg)
-
-        self._refresh_status_bar()
-        self._refresh_lang_buttons()
-
-        self._load_presets()
-
-    def _flag_for(self, code: str) -> str:
-        if code == "en":
-            return "\U0001f1ec\U0001f1e7"  # GB
-        if code == "uk":
-            return "\U0001f1fa\U0001f1e6"  # UA
-        return ""
-
-    def _refresh_lang_buttons(self) -> None:
-        active = i18n_manager().locale
-        for code, btn in (
-            ("en", self._lang_en_btn),
-            ("uk", self._lang_uk_btn),
-        ):
-            btn.setProperty("selected", code == active)
-            btn.style().unpolish(btn)
-            btn.style().polish(btn)
-
-    def _refresh_status_bar(self) -> None:
-        ready = ffmpeg_path().is_file()
-        msg = tr("FFmpeg ready") if ready else tr("FFmpeg missing — run scripts/fetch_ffmpeg.py")
-        self._status_msg.setText(f"v{__version__}  ·  {msg}")
-        if not ready:
-            self._append_log("WARNING: " + msg)
-
-    def open_file_dialog(self) -> None:
-        filters = (
-            tr("Choose a source video")
-            + " ("
-            + " ".join(f"*{ext}" for ext in sorted(VIDEO_EXTENSIONS))
-            + ");;All files (*.*)"
-        )
-        path_str, _ = QFileDialog.getOpenFileName(self, tr("Choose a source video"), "", filters)
-        if path_str:
-            self.set_source(Path(path_str))
+    # ----- signal handlers -----
 
     def set_source(self, path: Path) -> None:
         self.source_path = path
@@ -694,75 +749,45 @@ class MainWindow(QMainWindow):
         self._update_start_enabled()
         self._append_log(tr("Selected source:") + " " + str(path))
 
-    def _load_presets(self) -> None:
-        try:
-            self._presets = list(discover_builtins())
-        except Exception as exc:
-            QMessageBox.critical(
-                self,
-                tr("Preset load failed"),
-                tr("Could not load built-in presets:") + f"\n{exc}",
-            )
-            self._presets = []
+    def _on_tab_selected(self, name: str) -> None:
+        if name == "Custom":
+            return  # Don't overwrite current config
+        preset = self._builtins.get(name) or self._user_presets.get(name)
+        if preset is not None:
+            self._fill_from_preset(preset)
 
-        while self._preset_grid.count():
-            item = self._preset_grid.takeAt(0)
-            if item is None:
-                continue
-            w = item.widget()
-            if w is not None:
-                w.setParent(None)  # type: ignore[call-arg]
-                w.deleteLater()
-        self._preset_cards.clear()
-        self._selected_card = None
-
-        descriptions = {
-            "TikTok Soft": "Gentle effects, 9:16, 3-6s",
-            "TikTok Hard Uniq": "Aggressive effects, 9:16, 4-7s",
-            "YouTube Shorts": "Balanced, 9:16, 5-10s",
-            "Instagram Reels": "Mid intensity, 9:16, 3-8s",
-            "Plain Slice": "No effects, original aspect, 5-10s",
-        }
-        cols = 3
-        for idx, p in enumerate(self._presets):
-            card = PresetCard(
-                p,
-                p.description or descriptions.get(p.name, ""),
-                self._preset_grid_container,
-                self._on_card_clicked,
-            )
-            self._preset_grid.addWidget(card, idx // cols, idx % cols)
-            self._preset_cards.append(card)
-
-        custom_card = PresetCard(
-            "Custom",
-            "Configure everything yourself",
-            self._preset_grid_container,
-            self._on_card_clicked,
-        )
-        custom_card.preset = "Custom"
-        n = len(self._presets)
-        self._preset_grid.addWidget(custom_card, n // cols, n % cols)
-        self._preset_cards.append(custom_card)
-
-        if self._preset_cards:
-            self._on_card_clicked(self._preset_cards[0])
-
-    def _on_card_clicked(self, card: PresetCard) -> None:
-        for c in self._preset_cards:
-            c.set_selected(False)
-        card.set_selected(True)
-        self._selected_card = card
-        self._custom_panel.setVisible(card.preset == "Custom")
+    def _on_value_changed(self, *_args: object) -> None:
+        if self._filling_from_preset:
+            return
+        if self._tabs.active() != "Custom":
+            self._tabs.set_active("Custom", emit=False)
         self._update_start_enabled()
 
-    def _update_start_enabled(self) -> None:
-        ready = (
-            self.source_path is not None
-            and self._selected_card is not None
-            and ffmpeg_path().is_file()
-        )
-        self._start_btn.setEnabled(ready)
+    def _on_global_intensity_spin(self, value: int) -> None:
+        if self._gi_slider.value() != value:
+            self._gi_slider.blockSignals(True)
+            self._gi_slider.setValue(value)
+            self._gi_slider.blockSignals(False)
+        self._on_value_changed()
+
+    def _on_global_intensity_slider(self, value: int) -> None:
+        if self._gi_spin.value() != value:
+            self._gi_spin.blockSignals(True)
+            self._gi_spin.setValue(value)
+            self._gi_spin.blockSignals(False)
+        self._on_value_changed()
+
+    def _enforce_min_le_max(self, _value: float) -> None:
+        if self._min_spin.value() > self._max_spin.value():
+            sender = self.sender()
+            if sender is self._min_spin:
+                self._max_spin.blockSignals(True)
+                self._max_spin.setValue(self._min_spin.value())
+                self._max_spin.blockSignals(False)
+            else:
+                self._min_spin.blockSignals(True)
+                self._min_spin.setValue(self._max_spin.value())
+                self._min_spin.blockSignals(False)
 
     def _choose_output_dir(self) -> None:
         current = self._out_field.text() or str(default_output_dir())
@@ -775,17 +800,40 @@ class MainWindow(QMainWindow):
         path.mkdir(parents=True, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
-    def _resolved_preset(self) -> Preset | None:
-        if self._selected_card is None:
-            return None
-        if self._selected_card.preset == "Custom":
-            return self._custom_panel.build_preset()
-        return self._selected_card.preset  # type: ignore[return-value]
+    def _save_as_preset(self) -> None:
+        name, ok = QInputDialog.getText(
+            self,
+            tr("Save current as preset…"),
+            tr("Name your preset"),
+        )
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        if name in self._builtins or name in self._user_presets or name == "Custom":
+            QMessageBox.warning(
+                self,
+                tr("Preset name"),
+                tr("A preset with that name already exists."),
+            )
+            return
+        preset = self._build_current_preset(name, builtin=False)
+        target_dir = _user_presets_dir()
+        target = target_dir / f"{_slugify(name)}.cfp.json"
+        try:
+            save_preset_to_file(preset, target)
+        except Exception as exc:
+            QMessageBox.critical(self, tr("Preset saved"), f"{exc}")
+            return
+        self._user_presets[name] = preset
+        self._tabs.add_button(name)
+        self._tabs.set_active(name, emit=False)
+        self._append_log(tr("Preset saved") + ": " + str(target))
 
     def _start_job(self) -> None:
-        preset = self._resolved_preset()
-        if self.source_path is None or preset is None:
+        if self.source_path is None:
             return
+        active = self._tabs.active() or "Custom"
+        preset = self._build_current_preset(active, builtin=False)
         out_root = Path(self._out_field.text()).expanduser()
         try:
             out_root.mkdir(parents=True, exist_ok=True)
@@ -798,13 +846,13 @@ class MainWindow(QMainWindow):
             slicing=preset.slicing,
             effects=preset.effects,
             output=preset.output,
-            mode=preset.mode,
+            mode="clips",
             seed=None,
         )
         self._set_running(True)
         self._progress.setRange(0, 0)
         self._progress.setFormat(tr("Preparing…"))
-        self._append_log(tr("Starting job with preset") + f" “{preset.name}”")
+        self._append_log(tr("Starting job with preset") + f" '{active}'")
         self._runner.run_async(job)
 
     def _cancel(self) -> None:
@@ -816,10 +864,10 @@ class MainWindow(QMainWindow):
         self._cancel_btn.setEnabled(running)
         self._drop.setEnabled(not running)
         self._out_field.setEnabled(not running)
-        self._out_browse.setEnabled(not running)
-        for c in self._preset_cards:
-            c.setEnabled(not running)
-        self._custom_panel.setEnabled(not running)
+        self._browse_btn.setEnabled(not running)
+        self._save_preset_btn.setEnabled(not running)
+        self._config_card.setEnabled(not running)
+        self._tabs.setEnabled(not running)
 
     def _on_progress(self, done: int, total: int) -> None:
         self._progress.setRange(0, total)
@@ -856,22 +904,79 @@ class MainWindow(QMainWindow):
     def _append_log(self, line: str) -> None:
         self._log.appendPlainText(line)
 
+    def _update_start_enabled(self) -> None:
+        self._start_btn.setEnabled(self.source_path is not None and ffmpeg_path().is_file())
+
+    # ----- footer / status -----
+
+    def _flag_for(self, code: str) -> str:
+        if code == "en":
+            return "\U0001f1ec\U0001f1e7"  # GB
+        if code == "uk":
+            return "\U0001f1fa\U0001f1e6"  # UA
+        return ""
+
+    def _refresh_lang_buttons(self) -> None:
+        active = i18n_manager().locale
+        for code, btn in (("en", self._lang_en_btn), ("uk", self._lang_uk_btn)):
+            btn.setProperty("selected", code == active)
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+
+    def _refresh_status_bar(self) -> None:
+        ready = ffmpeg_path().is_file()
+        msg = tr("FFmpeg ready") if ready else tr("FFmpeg missing — run scripts/fetch_ffmpeg.py")
+        self._status_msg.setText(f"v{__version__}  ·  {msg}")
+
+    # ----- retranslate -----
+
     def _retranslate(self) -> None:
-        self._heading.setText(tr("ClipForge"))
-        self._tagline.setText(
-            tr("Slice long videos into short clips with subtle randomized effects.")
-        )
-        self._preset_heading.setText(tr("Preset"))
-        self._out_card_label.setText(tr("Output folder"))
-        self._out_browse.setText(tr("Browse…"))
-        self._out_open.setText(tr("Open"))
-        self._start_btn.setText(tr("Start"))
+        loaded = self.source_path is not None
+        self._drop.retranslate(loaded)
+        self._tabs.retranslate()
+        self._len_label.setText(tr("Length"))
+        self._from_label.setText(tr("From"))
+        self._to_label.setText(tr("To"))
+        self._gi_label.setText(tr("Global intensity"))
+        self._aspect_label.setText(tr("Aspect ratio"))
+        self._codec_label.setText(tr("Codec"))
+        self._quality_label.setText(tr("Quality"))
+        self._audio_label.setText(tr("Audio"))
+        self._pitch.setText(tr("Pitch preservation"))
+        self._effects_header.setText(tr("Effects"))
+        self._out_label.setText(tr("Output folder"))
+        self._log_label.setText(tr("Log"))
+        self._browse_btn.setText(tr("Browse…"))
+        self._open_out_btn.setText(tr("Open"))
+        self._save_preset_btn.setText(tr("Save current as preset…"))
         self._cancel_btn.setText(tr("Cancel"))
-        self._progress.setFormat(tr("Idle"))
-        self._drop.retranslate()
-        for c in self._preset_cards:
-            c.retranslate()
-        self._custom_panel.retranslate()
+        self._start_btn.setText(tr("Start"))
+        # Combo display strings that we own
+        idx = self._aspect.findData("original")
+        if idx >= 0:
+            self._aspect.setItemText(idx, tr("Original"))
+        for i in range(self._quality.count()):
+            data = self._quality.itemData(i)
+            label_map = {"fast": "Fast", "balanced": "Balanced", "high": "High Quality"}
+            if data in label_map:
+                self._quality.setItemText(i, tr(label_map[data]))
+        for i in range(self._audio.count()):
+            data = self._audio.itemData(i)
+            audio_label_map = {"keep": "Keep audio", "mute": "Mute", "remove": "Remove track"}
+            if data in audio_label_map:
+                self._audio.setItemText(i, tr(audio_label_map[data]))
+        # Combo-section labels (assigned dynamically via ``col()``):
+        for lbl_attr, src in (
+            ("_aspect_label", "Aspect ratio"),
+            ("_codec_label", "Codec"),
+            ("_quality_label", "Quality"),
+            ("_audio_label", "Audio"),
+        ):
+            lbl = getattr(self, lbl_attr, None)
+            if lbl is not None:
+                lbl.setText(tr(src))
+        for field, label_src in EFFECT_ORDER:
+            self._effect_rows[field].retranslate(tr(label_src))
         self._refresh_status_bar()
         self._refresh_lang_buttons()
 

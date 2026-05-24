@@ -44,6 +44,76 @@ QFrame#dropZone QLabel {
     color: #93C5D8;
 }
 
+QFrame#dropBar {
+    background-color: #0B1F2A;
+    border: 1px dashed #0E7490;
+    border-radius: 12px;
+}
+
+QFrame#dropBar[dragOver="true"] {
+    border: 1px solid #22D3EE;
+    background-color: #0E2A38;
+}
+
+QFrame#dropBar[loaded="true"] {
+    border: 1px solid rgba(34, 211, 238, 0.30);
+    background-color: #0B1F2A;
+}
+
+QPushButton[role="tab"] {
+    background-color: transparent;
+    color: #93C5D8;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 6px 14px;
+    font-weight: 500;
+}
+
+QPushButton[role="tab"]:hover {
+    color: #ECFEFF;
+    background-color: rgba(34, 211, 238, 0.10);
+}
+
+QPushButton[role="tab"][active="true"] {
+    background-color: #22D3EE;
+    color: #06141C;
+    border: 1px solid #22D3EE;
+    font-weight: 600;
+}
+
+QSplitter::handle {
+    background-color: transparent;
+    width: 8px;
+}
+
+QSplitter::handle:hover {
+    background-color: rgba(34, 211, 238, 0.15);
+}
+
+QSpinBox,
+QDoubleSpinBox {
+    background-color: #050E13;
+    color: #E0F7FB;
+    border: 1px solid rgba(34, 211, 238, 0.25);
+    border-radius: 6px;
+    padding: 4px 6px;
+    min-height: 20px;
+}
+
+QSpinBox:focus,
+QDoubleSpinBox:focus {
+    border-color: #22D3EE;
+}
+
+QSpinBox::up-button,
+QSpinBox::down-button,
+QDoubleSpinBox::up-button,
+QDoubleSpinBox::down-button {
+    width: 14px;
+    background-color: #0E2A38;
+    border: none;
+}
+
 QFrame#card,
 QFrame[role="card"] {
     background-color: #0B1F2A;
@@ -70,7 +140,16 @@ QFrame#presetCard QLabel[role="caption"] {
     color: #93C5D8;
 }
 
-QComboBox,
+QComboBox {
+    background-color: #0E2A38;
+    color: #ECFEFF;
+    border: 1px solid rgba(34, 211, 238, 0.30);
+    border-radius: 8px;
+    padding: 6px 10px;
+    min-height: 26px;
+    selection-background-color: #0891B2;
+}
+
 QPushButton[role="secondary"] {
     background-color: #0E2A38;
     color: #E0F7FB;
@@ -85,10 +164,8 @@ QPushButton[role="secondary"]:hover {
     border-color: #22D3EE;
 }
 
-QComboBox::drop-down {
-    border: none;
-    width: 22px;
-}
+/* Keep Qt's native combo arrow rendering — custom drop-down rules can
+   accidentally hide the display text on some PySide6 builds. */
 
 QComboBox QAbstractItemView {
     background-color: #0E2A38;
