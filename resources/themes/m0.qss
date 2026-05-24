@@ -1,0 +1,5 @@
+/* M0 stylesheet — the minimum needed to prove the QSS load path works.
+ * Replaced in M3 by full Neon Cut Dark/Light stylesheets. */
+QMainWindow {
+    background-color: #0A0612;
+}
