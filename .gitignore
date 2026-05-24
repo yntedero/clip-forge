@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# uv / virtualenv
+.venv/
+
+# Build output
+build/
+dist/
+*.egg-info/
+
+# PyInstaller
+*.spec.bak
+
+# Resources fetched at build time
+resources/ffmpeg/*
+!resources/ffmpeg/.gitkeep
+
+# Test artifacts
+tests/fixtures/_cache/
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/settings.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local env files
+.env
+.env.local
