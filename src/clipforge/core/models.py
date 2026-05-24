@@ -6,9 +6,9 @@ Every model is frozen and forbids extra fields.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 type EffectName = Literal[
     "mirror",
@@ -84,7 +84,7 @@ class OutputConfig(_Frozen):
     audio_overlay_path: Path | None = None
     audio_overlay_volume: float = Field(default=0.6, ge=0.0, le=2.0)
     source_audio_volume: float = Field(default=1.0, ge=0.0, le=2.0)
-    target_fps: int | None = 30
+    target_fps: int | None = Field(default=30, ge=1)
     shuffle_assembled: bool = False
     transition: Transition = "none"
 
@@ -132,7 +132,7 @@ class ClipPlan(_Frozen):
 
 class Preset(_Frozen):
     schema_version: int = 1
-    name: str = Field(min_length=1)
+    name: Annotated[str, StringConstraints(min_length=1, strip_whitespace=True)]
     description: str | None = None
     builtin: bool = False
     slicing: SlicingConfig

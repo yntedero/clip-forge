@@ -42,7 +42,8 @@ def test_slicing_config_min_gt_max_rejected() -> None:
         SlicingConfig(min_length_sec=5.0, max_length_sec=3.0)
 
 
-def test_slicing_config_random_sample_requires_count() -> None:
+def test_slicing_config_random_sample_count_zero_rejected() -> None:
+    """random_sample_count=0 is rejected by the ge=1 field constraint."""
     from clipforge.core.models import SlicingConfig
 
     with pytest.raises(PydanticValidationError):
@@ -51,6 +52,19 @@ def test_slicing_config_random_sample_requires_count() -> None:
             min_length_sec=3.0,
             max_length_sec=5.0,
             random_sample_count=0,
+        )
+
+
+def test_slicing_config_random_sample_count_default_none_rejected() -> None:
+    """The model_validator rejects random_sample with no count supplied."""
+    from clipforge.core.models import SlicingConfig
+
+    with pytest.raises(PydanticValidationError):
+        SlicingConfig(
+            strategy="random_sample",
+            min_length_sec=3.0,
+            max_length_sec=5.0,
+            # random_sample_count defaults to None → validator should reject
         )
 
 
@@ -252,3 +266,40 @@ def test_preset_round_trip() -> None:
     assert parsed["schema_version"] == 1
     restored = Preset.model_validate_json(text)
     assert restored == p
+
+
+def test_preset_name_whitespace_only_rejected() -> None:
+    from clipforge.core.models import (
+        EffectsConfig,
+        EffectSettings,
+        OutputConfig,
+        Preset,
+        SlicingConfig,
+    )
+
+    off = EffectSettings(enabled=False, intensity=0.0, probability=0.0)
+    with pytest.raises(PydanticValidationError):
+        Preset(
+            name="   ",
+            slicing=SlicingConfig(min_length_sec=3.0, max_length_sec=5.0),
+            effects=EffectsConfig(
+                global_intensity=1.0,
+                mirror=off,
+                zoom=off,
+                speed=off,
+                color=off,
+                rotation=off,
+                edge_crop=off,
+                noise=off,
+                vignette=off,
+                pixel_shift=off,
+                film_grain=off,
+            ),
+            output=OutputConfig(
+                aspect="9:16",
+                codec="libx264",
+                quality="balanced",
+                audio_mode="keep",
+            ),
+            mode="clips",
+        )
