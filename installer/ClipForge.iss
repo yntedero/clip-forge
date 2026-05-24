@@ -2,13 +2,14 @@
 ; Builds ClipForgeSetup.exe from dist/ClipForge produced by PyInstaller.
 
 #define MyAppName "ClipForge"
-#define MyAppVersion "1.0.1"
+#define MyAppVersion "1.0.2"
 #define MyAppPublisher "Yurii Ostapchuk"
 #define MyAppURL "https://github.com/yntedero/clip-forge"
 #define MyAppExeName "ClipForge.exe"
 
 [Setup]
-AppId={{B7F9C8C0-1A4E-4F71-9B86-CLIPFORGE-1011}
+AppId={{B7F9C8C0-1A4E-4F71-9B86-CLIPFORGE-1010}
+SetupIconFile=..\resources\icons\app.ico
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} {#MyAppVersion}

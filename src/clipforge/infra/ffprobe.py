@@ -36,13 +36,16 @@ def probe(source: Path) -> VideoMetadata:
         "-show_format",
         str(source),
     ]
+    from clipforge.infra.ffmpeg import _subprocess_kwargs
+
     try:
-        result = subprocess.run(
+        result = subprocess.run(  # type: ignore[call-overload]
             args,
             capture_output=True,
             text=True,
             check=True,
             timeout=30,
+            **_subprocess_kwargs(),
         )
     except subprocess.CalledProcessError as exc:
         raise ProbeError(f"ffprobe failed (exit {exc.returncode}): {exc.stderr.strip()}") from exc

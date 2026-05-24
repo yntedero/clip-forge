@@ -14,6 +14,7 @@ datas = [
     (str(ROOT / "resources" / "themes"), "resources/themes"),
     (str(ROOT / "resources" / "presets"), "resources/presets"),
     (str(ROOT / "resources" / "ffmpeg"), "resources/ffmpeg"),
+    (str(ROOT / "resources" / "icons"), "resources/icons"),
 ]
 
 block_cipher = None
@@ -76,6 +77,7 @@ exe = EXE(  # noqa: F821
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=str(ROOT / "resources" / "icons" / "app.ico"),
 )
 
 coll = COLLECT(  # noqa: F821

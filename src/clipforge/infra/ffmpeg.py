@@ -100,6 +100,49 @@ def build_clip_argv(
     return argv
 
 
+def _subprocess_kwargs() -> dict[str, object]:
+    """Cross-platform subprocess flags that hide console windows and
+    avoid PyInstaller's _MEIPASS-injected DLL search paths from poisoning
+    the child process (which causes ffmpeg.exe to fail with
+    STATUS_DLL_INIT_FAILED / 0xC0000142 on Windows).
+    """
+    import os
+    import subprocess
+    import sys
+
+    kwargs: dict[str, object] = {}
+
+    # Clean environment for the child — strip PyInstaller markers and
+    # Python-internal vars that don't apply to ffmpeg.
+    env = os.environ.copy()
+    for key in (
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "PYTHONSTARTUP",
+        "PYTHONOPTIMIZE",
+        "PYTHONDONTWRITEBYTECODE",
+        "_MEIPASS",
+        "_MEIPASS2",
+        "LD_LIBRARY_PATH",
+        "DYLD_LIBRARY_PATH",
+    ):
+        env.pop(key, None)
+    kwargs["env"] = env
+
+    if sys.platform.startswith("win"):
+        # CREATE_NO_WINDOW = 0x08000000 — suppresses the black CMD flash
+        # that otherwise appears for every spawned subprocess in a GUI app.
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(
+            subprocess, "CREATE_NEW_PROCESS_GROUP", 0
+        )
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = subprocess.SW_HIDE
+        kwargs["startupinfo"] = si
+
+    return kwargs
+
+
 def run_clip_blocking(
     input_args: list[str],
     video_filter: str | None,
@@ -108,18 +151,21 @@ def run_clip_blocking(
     on_progress: Callable[[float], None] | None = None,
     timeout_sec: int = 600,
 ) -> Path:
-    """Run a single FFmpeg invocation synchronously (no Qt event loop).
-
-    Used by tests / CLI smoke. Returns the output path on success;
-    raises :class:`FFmpegRunError` on failure.
-    """
+    """Run a single FFmpeg invocation synchronously (no Qt event loop)."""
     import subprocess  # local import — keep top namespace clean
 
     argv = [
         str(ffmpeg_path()),
         *build_clip_argv(input_args, video_filter, audio_filter, output_args),
     ]
-    proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout_sec, check=False)
+    proc = subprocess.run(  # type: ignore[call-overload]
+        argv,
+        capture_output=True,
+        text=True,
+        timeout=timeout_sec,
+        check=False,
+        **_subprocess_kwargs(),
+    )
     if proc.returncode != 0:
         raise FFmpegRunError(f"ffmpeg exit {proc.returncode}: {proc.stderr[-2000:]}")
     output_path = Path(output_args[-1])

@@ -64,6 +64,12 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["PT011"]
+# Translations contain Cyrillic characters that ruff confuses with Latin
+# look-alikes; suppress the ambiguous-character rules in i18n.
+"src/clipforge/i18n.py" = ["RUF001", "RUF002", "RUF003"]
+"scripts/build_icon.py" = ["RUF003"]
+"src/clipforge/app.py" = ["RUF001", "RUF002", "RUF003"]
+"src/clipforge/job_runner.py" = ["RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -82,6 +88,7 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = [
     "clipforge.app",
+    "clipforge.i18n",
     "clipforge.job_runner",
     "clipforge.infra.ffmpeg",
     "clipforge.infra.ffprobe",
