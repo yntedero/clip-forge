@@ -20,6 +20,7 @@ coverage.xml
 build/
 dist/
 *.egg-info/
+installer/Output/
 
 # PyInstaller
 *.spec.bak
@@ -48,3 +49,8 @@ docs/*
 
 # Local test media (user-supplied videos, not committed)
 test-video/
+
+# E2E pipeline output and screenshots (local-only artifacts)
+e2e-output/
+e2e-output-tiktok/
+screenshots/
