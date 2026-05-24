@@ -1,5 +1,141 @@
-/* M0 stylesheet — the minimum needed to prove the QSS load path works.
- * Replaced in M3 by full Neon Cut Dark/Light stylesheets. */
-QMainWindow {
+/* ClipForge — Neon Cut Dark (v1.0.1 minimum styling). */
+
+QMainWindow,
+QWidget#central {
     background-color: #0A0612;
+    color: #F4F1FA;
+    font-family: "Segoe UI", "Arial", sans-serif;
+    font-size: 14px;
+}
+
+QLabel {
+    color: #F4F1FA;
+}
+
+QLabel[role="heading"] {
+    font-size: 24px;
+    font-weight: 600;
+    letter-spacing: -0.5px;
+}
+
+QLabel[role="subtitle"] {
+    color: #B6ADD0;
+    font-size: 13px;
+}
+
+QLabel[role="caption"] {
+    color: #7A718E;
+    font-size: 12px;
+}
+
+QFrame#dropZone {
+    background-color: #16102A;
+    border: 2px dashed #6B21A8;
+    border-radius: 16px;
+    color: #B6ADD0;
+}
+
+QFrame#dropZone[dragOver="true"] {
+    border: 2px solid #D946EF;
+    background-color: #1F1838;
+}
+
+QFrame#dropZone QLabel {
+    color: #B6ADD0;
+}
+
+QFrame#card {
+    background-color: #16102A;
+    border: 1px solid rgba(217, 70, 239, 0.10);
+    border-radius: 14px;
+}
+
+QComboBox,
+QPushButton[role="secondary"] {
+    background-color: #1F1838;
+    color: #F4F1FA;
+    border: 1px solid rgba(217, 70, 239, 0.20);
+    border-radius: 10px;
+    padding: 8px 14px;
+    min-height: 22px;
+}
+
+QComboBox:hover,
+QPushButton[role="secondary"]:hover {
+    border-color: #D946EF;
+}
+
+QComboBox QAbstractItemView {
+    background-color: #1F1838;
+    color: #F4F1FA;
+    selection-background-color: #6B21A8;
+    border: 1px solid rgba(217, 70, 239, 0.20);
+}
+
+QPushButton#startButton {
+    background-color: #D946EF;
+    color: #FFFFFF;
+    border: none;
+    border-radius: 12px;
+    padding: 14px 28px;
+    font-weight: 600;
+    font-size: 15px;
+}
+
+QPushButton#startButton:hover {
+    background-color: #E879F9;
+}
+
+QPushButton#startButton:pressed {
+    background-color: #C026D3;
+}
+
+QPushButton#startButton:disabled {
+    background-color: #2A2240;
+    color: #7A718E;
+}
+
+QPushButton[role="secondary"]:disabled {
+    color: #7A718E;
+}
+
+QProgressBar {
+    background-color: #16102A;
+    border: none;
+    border-radius: 8px;
+    color: #F4F1FA;
+    text-align: center;
+    height: 16px;
+}
+
+QProgressBar::chunk {
+    background-color: #D946EF;
+    border-radius: 8px;
+}
+
+QPlainTextEdit#logView {
+    background-color: #080510;
+    color: #B6ADD0;
+    border: 1px solid rgba(217, 70, 239, 0.10);
+    border-radius: 10px;
+    padding: 8px;
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 12px;
+}
+
+QLineEdit {
+    background-color: #080510;
+    color: #F4F1FA;
+    border: 1px solid rgba(217, 70, 239, 0.20);
+    border-radius: 8px;
+    padding: 8px 12px;
+}
+
+QLineEdit:focus {
+    border-color: #D946EF;
+}
+
+QStatusBar {
+    background-color: #100A1F;
+    color: #B6ADD0;
 }

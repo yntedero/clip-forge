@@ -80,9 +80,14 @@ module = ["PySide6.*", "qtawesome.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["clipforge.app"]
+module = [
+    "clipforge.app",
+    "clipforge.job_runner",
+    "clipforge.infra.ffmpeg",
+    "clipforge.infra.ffprobe",
+]
 # PySide6 ships no stubs; suppress errors that arise from untyped Qt bases.
-disable_error_code = ["misc", "no-any-return"]
+disable_error_code = ["misc", "no-any-return", "unused-ignore"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
